@@ -1,0 +1,30 @@
+{
+  "codecs": [
+    {
+      "name": "bytes",
+      "type": "numcodecs",
+      "configuration": {
+        "endian": "little",
+        "data_type": "uint16",
+        "shape": [
+          1024,
+          1024
+        ]
+      }
+    },
+    {
+      "name": "tiff_predictor_2",
+      "type": "wasm",
+      "uri": "file:///absolute/path/to/tiff-predictor-2-c.wasm",
+      "configuration": {
+        "bytes_per_sample": 2,
+        "width": 1024
+      }
+    },
+    {
+      "name": "zlib",
+      "type": "numcodecs",
+      "configuration": {}
+    }
+  ]
+}

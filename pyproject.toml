@@ -1,0 +1,72 @@
+[project]
+name = "chonkle"
+description = "A chunk decoder demonstrator"
+readme = "README.md"
+requires-python = ">=3.14.0"
+version = "0.0.0"
+dependencies = [
+    "numcodecs",
+    "numpy",
+    "rioxarray",
+    "tifffile",
+    "wasmtime",
+    "xarray",
+    "zarr>=3",
+]
+
+[project.scripts]
+chonkle = "chonkle.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff.lint]
+# https://docs.astral.sh/ruff/rules/
+ignore = [
+    "COM812",  # conflicts with ruff formatter
+]
+select = [
+    'B',
+    'BLE',
+    'C4',
+    'C90',
+    'COM',
+    'DTZ',
+    'E',
+    'ERA',
+    'F',
+    'FA',
+    'G',
+    'I',
+    'INP',
+    'N',
+    'NPY',
+    'PT',
+    'PTH',
+    'RET',
+    'RUF',
+    'S',
+    'SIM',
+    'T20',
+    'UP',
+    'W',
+
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+ignore_missing_imports = true
+scripts_are_modules = true
+explicit_package_bases = true
+
+[dependency-groups]
+dev = [
+    "mypy>=1.0",
+    "pre-commit>=4.0",
+    "pre-commit-hooks>=6.0",
+    "pytest>=9.0",
+    "ruff>=0.15",
+]
