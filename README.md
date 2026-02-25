@@ -94,3 +94,7 @@ The decode pipeline applies codecs in **reverse order**, unwinding the encoding.
 - `"uri"` — (WASM only) URI of the `.wasm` module
 
 Python and WASM codec steps can be freely mixed in any order. For information on how WASM codecs work, see [WASM.md](WASM.md).
+
+## Acknowledgements
+
+Partially supported by NASA-IMPACT VEDA project
