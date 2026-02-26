@@ -27,27 +27,47 @@ def resolve_wasm_uri(uri: str) -> Path:
     raise NotImplementedError(msg)
 
 
-def wasm_decode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
-    """Decode *data* using the WASM codec module at *wasm_path*.
+def _wasm_call(
+    wasm_path: Path,
+    export_name: str,
+    data: bytes,
+    configuration: dict,
+) -> bytes:
+    """Call a WASM codec export and return the result bytes.
 
     The module must export the generic WASM codec ABI:
 
     * ``alloc(size: i32) -> i32``
     * ``dealloc(ptr: i32, size: i32)``
-    * ``decode(input_ptr, input_len, config_ptr, config_len) -> i64``
+    * ``<export_name>(input_ptr, input_len, config_ptr, config_len) -> i64``
     * ``memory``
+
+    Both freestanding (no imports) and WASI modules are supported.
     """
     resolved = wasm_path.resolve()
     engine = wasmtime.Engine()
     module = wasmtime.Module.from_file(engine, str(resolved))
     store = wasmtime.Store(engine)
-    instance = wasmtime.Instance(store, module, [])
+
+    if module.imports:
+        wasi_config = wasmtime.WasiConfig()
+        store.set_wasi(wasi_config)
+        linker = wasmtime.Linker(engine)
+        linker.define_wasi()
+        instance = linker.instantiate(store, module)
+    else:
+        instance = wasmtime.Instance(store, module, [])
 
     # Get exported functions and memory.
     exports = instance.exports(store)
+
+    # WASI reactors export _initialize for runtime setup.
+    initialize_fn = exports.get("_initialize")
+    if initialize_fn is not None:
+        cast(wasmtime.Func, initialize_fn)(store)
     alloc_fn = cast(wasmtime.Func, exports["alloc"])
     dealloc_fn = cast(wasmtime.Func, exports["dealloc"])
-    decode_fn = cast(wasmtime.Func, exports["decode"])
+    codec_fn = cast(wasmtime.Func, exports[export_name])
     memory = cast(wasmtime.Memory, exports["memory"])
 
     # Write input data into WASM linear memory.
@@ -61,15 +81,15 @@ def wasm_decode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
     config_ptr = alloc_fn(store, config_len)
     memory.write(store, config_bytes, config_ptr)
 
-    # Call decode.
-    result_i64 = decode_fn(store, input_ptr, input_len, config_ptr, config_len)
+    # Call the codec function.
+    result_i64 = codec_fn(store, input_ptr, input_len, config_ptr, config_len)
 
     # Unpack (output_ptr << 32) | output_len.
     out_ptr = (result_i64 >> 32) & 0xFFFFFFFF
     out_len = result_i64 & 0xFFFFFFFF
 
     if out_ptr == 0 and out_len == 0:
-        msg = "WASM decode returned null (bad configuration?)"
+        msg = f"WASM {export_name} returned null (bad configuration?)"
         raise RuntimeError(msg)
 
     # Read output from WASM memory.
@@ -81,3 +101,13 @@ def wasm_decode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
     dealloc_fn(store, out_ptr, out_len)
 
     return bytes(output)
+
+
+def wasm_decode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
+    """Decode *data* using the WASM codec module at *wasm_path*."""
+    return _wasm_call(wasm_path, "decode", data, configuration)
+
+
+def wasm_encode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
+    """Encode *data* using the WASM codec module at *wasm_path*."""
+    return _wasm_call(wasm_path, "encode", data, configuration)

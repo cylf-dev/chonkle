@@ -1,19 +1,28 @@
-# WASM Codecs
+# Running Custom Codecs with WebAssembly
 
 ## What is WebAssembly?
 
-WebAssembly (WASM) is a binary instruction format originally designed to run compiled code in web browsers alongside JavaScript. But the same properties that make it useful in browsers turned out to be valuable outside of them too. Standalone runtimes like [Wasmtime](https://wasmtime.dev/) can execute `.wasm` modules as ordinary programs or libraries, with no browser involved. This project uses WASM in that non-browser context: Python loads and runs `.wasm` codec modules through Wasmtime.
+WebAssembly (WASM) is a specification for a CPU that doesn't physically exist. It defines the operations this CPU can perform (things like "add two integers" or "load a byte from memory"), how it executes them, and how its memory is organized. A `.wasm` file is a program composed of these operations, similar in spirit to a native executable, but targeting this virtual CPU instead of any real hardware. A program that implements the virtual CPU is called a "runtime." The runtime reads the operations in a `.wasm` file and executes them. Because the operations target a virtual CPU rather than a specific physical one, the same `.wasm` file runs identically on any OS and architecture, and because execution goes through the runtime, the runtime can enforce strict safety guarantees like memory isolation.
 
-Two properties make WASM useful for codecs:
+WASM is often called a "virtual machine," but it's a different kind than the hypervisor kind (VMware, VirtualBox, EC2). Those virtualize an entire computer — CPU, memory, disk, network — so a full guest OS can boot inside. WASM virtualizes just a CPU: there's no OS, no virtual disk, no boot process, just a computation engine that executes instructions. The JVM (Java Virtual Machine) works the same way.
 
-- **Portable** — The same `.wasm` binary runs on any OS and architecture. No need to compile separate binaries for Linux/macOS/Windows or x86/ARM.
-- **Sandboxed** — A WASM module gets its own private block of memory and cannot access the host's memory, filesystem, or network unless the host explicitly allows it.
+WASM was originally created for web browsers, where the runtime is built into the browser itself. But the same properties turned out to be valuable outside of browsers too. Standalone runtimes like [Wasmtime](https://wasmtime.dev/) can run `.wasm` modules outside the browser — either as standalone programs (the module has a `main` entry point and the runtime runs it) or as libraries (the host program loads the module and calls its exported functions on demand). This project uses WASM in the library sense: Python loads a `.wasm` codec module through Wasmtime and calls its exported functions (`alloc`, `decode`, `dealloc`) as needed.
 
-## Why run WASM from Python?
+## Why WASM and Python?
 
-Python is a attractive choice for the host layer because it gives us direct access to Zarr's numcodecs library for standard codecs. But custom codecs that aren't part of numcodecs pose two problems: pure Python implementations are often slow, and running untrusted native code safely is difficult. The traditional options for speed — C extensions or Cython — require platform-specific compilation, complex build tooling, and grant native code full access to your process memory.
+### Why WASM for custom codecs?
 
-WASM solves both problems. Compiled C/Rust code runs at near-native speed inside the sandbox, and because WASM modules are portable, custom codecs can be distributed and executed securely on any platform without recompilation.
+Custom codecs need to be fast, portable, and safe. The traditional options for fast codecs — C extensions or Cython — require platform-specific compilation and complex build tooling. Worse, native code loaded into your process (via C extensions, shared libraries, etc.) runs with the same privileges as your program: it can read and write any of your process's memory, access the filesystem, and make network calls. There is no built-in boundary between your code and the native extension.
+
+WASM gives us all three properties:
+
+- **Fast:** Compiled C/Rust code runs at near-native speed.
+- **Portable:** The same `.wasm` binary runs on any OS and architecture without recompilation.
+- **Safe:** The runtime's sandbox ensures a codec module can only access its own memory — it cannot touch the host process, the filesystem, or the network unless explicitly permitted.
+
+### Why Python as the host?
+
+Python is widely used in the geospatial community (our initial target audience), which means more people can read, understand, and contribute to the host code than if it were written in a compiled language like Rust or C++. It also gives us direct access to Zarr's numcodecs library, so standard codecs work out of the box alongside custom WASM codecs.
 
 ## How this project uses WASM
 
