@@ -9,7 +9,7 @@ def main() -> None:
     """Entry point for the chonkle CLI."""
     parser = argparse.ArgumentParser(
         prog="chonkle",
-        description="Utilities for accessing and decoding chunks.",
+        description="Utilities for encoding, decoding, and inspecting chunks.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -115,7 +115,7 @@ def main() -> None:
     # ── decode (direct subcommand) ──
     dc_parser = subparsers.add_parser(
         "decode",
-        help="Decode a chunk and print a 5x5 excerpt.",
+        help="Decode a chunk and display or save the result.",
     )
     dc_parser.add_argument(
         "chunk_path",
@@ -123,10 +123,58 @@ def main() -> None:
         help="Path to an encoded chunk file "
         "(sidecar metadata expected at <path>.json).",
     )
+    dc_parser.add_argument(
+        "--pipeline",
+        type=Path,
+        default=None,
+        help="Path to a pipeline JSON file. Defaults to <chunk_path>.json sidecar.",
+    )
+    dc_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Save the decoded array to a .npy file instead of printing.",
+    )
+
+    # ── encode (direct subcommand) ──
+    en_parser = subparsers.add_parser(
+        "encode",
+        help="Encode a .npy array through a codec pipeline.",
+    )
+    en_parser.add_argument(
+        "input",
+        type=Path,
+        help="Path to a .npy file containing the array to encode.",
+    )
+    en_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="Path for the encoded output. "
+        "Pipeline is read from <output>.json sidecar by default.",
+    )
+    en_parser.add_argument(
+        "--pipeline",
+        type=Path,
+        default=None,
+        help="Path to a pipeline JSON file. Defaults to <output>.json sidecar.",
+    )
 
     args = parser.parse_args()
 
     if args.command == "cog":
+        _run_cog(args)
+    elif args.command == "decode":
+        _run_decode(args)
+    elif args.command == "encode":
+        _run_encode(args)
+
+
+def _run_cog(args: argparse.Namespace) -> None:
+    """Dispatch COG subcommands."""
+    try:
         if args.cog_command == "download":
             from chonkle.cog.download import download_cog
 
@@ -150,10 +198,58 @@ def main() -> None:
             from chonkle.cog.inspect import extract_tile
 
             extract_tile(args.input, args.tile_index, args.output)
-    elif args.command == "decode":
-        from chonkle.decode.pipeline import decode_chunk
+    except ImportError:
+        sys.stderr.write(
+            "The 'cog' commands require extra dependencies.\n"
+            "Install them with: uv sync --extra cog\n"
+        )
+        sys.exit(1)
 
-        arr = decode_chunk(args.chunk_path)
+
+def _run_decode(args: argparse.Namespace) -> None:
+    """Decode a chunk and print or save the result."""
+    import numpy as np
+
+    from chonkle.pipeline import decode, get_codecs
+
+    pipeline_path = args.pipeline or Path(str(args.chunk_path) + ".json")
+    codec_specs = get_codecs(pipeline_path)
+    data = args.chunk_path.read_bytes()
+    arr = decode(data, codec_specs)
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        np.save(args.output, arr)
+        sys.stdout.write(f"Saved {arr.shape} {arr.dtype} array to {args.output}\n")
+    else:
         sys.stdout.write(f"Shape: {arr.shape}, dtype: {arr.dtype}\n")
         slices = tuple(slice(min(5, s)) for s in arr.shape)
         sys.stdout.write(f"First 5x5:\n{arr[slices]}\n")
+
+
+def _run_encode(args: argparse.Namespace) -> None:
+    """Encode a .npy array through a codec pipeline."""
+    import shutil
+
+    import numpy as np
+
+    from chonkle.pipeline import encode, get_codecs
+
+    arr = np.load(args.input)
+
+    sidecar = Path(str(args.output) + ".json")
+    pipeline_path = args.pipeline if args.pipeline is not None else sidecar
+
+    codec_specs = get_codecs(pipeline_path)
+    encoded = encode(arr, codec_specs)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_bytes(encoded)
+
+    # Copy pipeline to sidecar if it came from elsewhere.
+    if args.pipeline is not None and args.pipeline.resolve() != sidecar.resolve():
+        shutil.copy2(args.pipeline, sidecar)
+
+    sys.stdout.write(
+        f"Encoded {arr.shape} {arr.dtype} → {len(encoded)} bytes → {args.output}\n"
+    )

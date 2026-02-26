@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from chonkle.decode.codecs import (
+from chonkle.codecs import (
     BytesCodec,
     Endian,
     TiffPredictor2,

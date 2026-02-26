@@ -30,13 +30,13 @@ This project uses the **Core WASM** approach (see [Why Core WASM?](#why-core-was
 
 ### Codec pipelines
 
-The decode pipeline (`pipeline.py`) applies a sequence of codec steps to decode a chunk. Each step can be a **Python codec** (via numcodecs) or a **WASM codec**. They can be freely mixed in any order. For example, a COG tile might be decoded as:
+The codec pipeline (`pipeline.py`) applies a sequence of codec steps to encode or decode a chunk. Each step can be a **Python codec** (via numcodecs) or a **WASM codec**. They can be freely mixed in any order. For example, a COG tile pipeline might look like:
 
 ```text
-compressed bytes  ──[zlib (Python)]──►  differenced bytes  ──[tiff_predictor_2 (WASM)]──►  raw bytes  ──[bytes (Python)]──►  numpy array
+numpy array  ──[bytes (Python)]──►  raw bytes  ──[tiff_predictor_2 (WASM)]──►  differenced bytes  ──[zlib (Python)]──►  compressed bytes
 ```
 
-Codecs are applied in **reverse order**, unwinding the encoding chain. Each step receives the output of the previous step.
+**Encoding** applies codecs in forward order (as shown above). **Decoding** applies them in reverse order, unwinding the encoding. Each step receives the output of the previous step.
 
 ### Pipeline metadata format
 
@@ -80,28 +80,31 @@ An ABI (Application Binary Interface) defines how two separately compiled pieces
 
 Every WASM codec module must export a `memory` and three functions. The `memory` export is the module's linear memory — a resizable byte array that the host reads from and writes to in order to pass data across the WASM boundary. It is automatically provided by the compiler when you target `wasm32`; codec authors do not need to define it.
 
-The three functions that codec authors must implement:
+The functions that codec authors must implement:
 
 | Export | Signature | Purpose |
 | --- | --- | --- |
 | `alloc` | `(size: i32) -> i32` | Allocate `size` bytes, return a pointer |
 | `dealloc` | `(ptr: i32, size: i32)` | Free a previously allocated buffer |
 | `decode` | `(input_ptr: i32, input_len: i32, config_ptr: i32, config_len: i32) -> i64` | Decode data; return packed result |
+| `encode` | `(input_ptr: i32, input_len: i32, config_ptr: i32, config_len: i32) -> i64` | Encode data; return packed result |
+
+A module may export `decode`, `encode`, or both. The host calls whichever function matches the pipeline direction.
 
 #### Calling convention
 
-The host (`wasm_runner.py`) performs the following sequence for each decode call:
+The host (`wasm_runner.py`) performs the following sequence for each codec call (`decode` or `encode`):
 
 1. **Allocate and write input** — Call `alloc(len(data))`, then write the raw input bytes into linear memory at the returned pointer.
 2. **Allocate and write config** — Serialize the configuration dict as a JSON string, call `alloc(len(json_bytes))`, then write the JSON bytes into linear memory.
-3. **Call `decode`** — Pass the four arguments: `input_ptr`, `input_len`, `config_ptr`, `config_len`.
+3. **Call the codec function** (`decode` or `encode`) — Pass the four arguments: `input_ptr`, `input_len`, `config_ptr`, `config_len`.
 4. **Unpack the result** — The return value is a single `i64` encoding both the output pointer and length: `out_ptr = (result >> 32) & 0xFFFFFFFF`, `out_len = result & 0xFFFFFFFF`.
 5. **Read output** — Copy `out_len` bytes from linear memory starting at `out_ptr`.
 6. **Deallocate** — Call `dealloc` three times to free the input, config, and output buffers.
 
 #### Error signaling
 
-If `decode` returns `out_ptr = 0` and `out_len = 0`, the host treats this as a decode failure and raises a `RuntimeError`.
+If the codec function returns `out_ptr = 0` and `out_len = 0`, the host treats this as a failure and raises a `RuntimeError`.
 
 ## Why Core WASM over the Component Model?
 
@@ -125,7 +128,7 @@ The WASM Component Model spec continues to evolve, and committing to it now mean
 
 A natural question when passing potentially large chunks through WASM codecs is: *can we avoid copying data into WASM linear memory?*
 
-The answer appears to be **no** — at least not today. WASM's sandbox model means a module can only read and write its own linear memory — it cannot dereference a host pointer or access the Python heap. The host *can* read and write the module's linear memory, but not the reverse. So data needs to be copied in before processing and copied out after. Each call to `wasm_decode()` performs two copies:
+The answer appears to be **no** — at least not today. WASM's sandbox model means a module can only read and write its own linear memory — it cannot dereference a host pointer or access the Python heap. The host *can* read and write the module's linear memory, but not the reverse. So data needs to be copied in before processing and copied out after. Each call to `wasm_decode()` or `wasm_encode()` performs two copies:
 
 ```text
    Python bytes

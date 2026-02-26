@@ -50,9 +50,13 @@ source = { editable = "." }
 dependencies = [
     { name = "numcodecs" },
     { name = "numpy" },
+    { name = "wasmtime" },
+]
+
+[package.optional-dependencies]
+cog = [
     { name = "rioxarray" },
     { name = "tifffile" },
-    { name = "wasmtime" },
     { name = "xarray" },
     { name = "zarr" },
 ]
@@ -70,12 +74,13 @@ dev = [
 requires-dist = [
     { name = "numcodecs" },
     { name = "numpy" },
-    { name = "rioxarray" },
-    { name = "tifffile" },
+    { name = "rioxarray", marker = "extra == 'cog'" },
+    { name = "tifffile", marker = "extra == 'cog'" },
     { name = "wasmtime" },
-    { name = "xarray" },
-    { name = "zarr", specifier = ">=3" },
+    { name = "xarray", marker = "extra == 'cog'" },
+    { name = "zarr", marker = "extra == 'cog'", specifier = ">=3" },
 ]
+provides-extras = ["cog"]
 
 [package.metadata.requires-dev]
 dev = [

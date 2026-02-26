@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from chonkle.decode.codecs import TiffPredictor2
-from chonkle.decode.wasm_runner import resolve_wasm_uri, wasm_decode, wasm_encode
+from chonkle.codecs import TiffPredictor2
+from chonkle.wasm_runner import resolve_wasm_uri, wasm_decode, wasm_encode
 
 from .conftest import FIXTURES_DIR
 

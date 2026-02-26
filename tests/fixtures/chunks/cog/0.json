@@ -20,7 +20,9 @@
     {
       "name": "zlib",
       "type": "numcodecs",
-      "configuration": {}
+      "configuration": {
+        "level": 9
+      }
     }
   ]
 }

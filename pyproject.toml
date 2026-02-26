@@ -1,15 +1,19 @@
 [project]
 name = "chonkle"
-description = "A chunk decoder demonstrator"
+description = "A codec pipeline library for encoding and decoding chunked array data"
 readme = "README.md"
 requires-python = ">=3.14.0"
 version = "0.0.0"
 dependencies = [
     "numcodecs",
     "numpy",
+    "wasmtime",
+]
+
+[project.optional-dependencies]
+cog = [
     "rioxarray",
     "tifffile",
-    "wasmtime",
     "xarray",
     "zarr>=3",
 ]
