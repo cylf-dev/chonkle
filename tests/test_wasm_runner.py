@@ -24,7 +24,31 @@ class TestResolveWasmUri:
 
     def test_unsupported_scheme_raises(self) -> None:
         with pytest.raises(NotImplementedError, match="Unsupported URI scheme"):
-            resolve_wasm_uri("oci://registry/codec:v1")
+            resolve_wasm_uri("ftp://registry/codec:v1")
+
+    def test_https_uri_delegates_to_download(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        wasm = tmp_path / "downloaded.wasm"
+        wasm.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            "chonkle.wasm_runner.download_https",
+            lambda url, **kw: wasm,
+        )
+        result = resolve_wasm_uri("https://example.com/codec.wasm")
+        assert result == wasm
+
+    def test_oci_uri_delegates_to_download(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        wasm = tmp_path / "downloaded.wasm"
+        wasm.write_bytes(b"\x00")
+        monkeypatch.setattr(
+            "chonkle.wasm_runner.download_oci",
+            lambda uri, **kw: wasm,
+        )
+        result = resolve_wasm_uri("oci://ghcr.io/org/repo:v1")
+        assert result == wasm
 
 
 class TestWasmDecode:

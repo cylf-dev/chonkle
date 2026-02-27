@@ -19,17 +19,19 @@ def cog_to_zarr(
         msg = f"Expected a Dataset, got {type(ds)}"
         raise TypeError(msg)
 
-    encoding: dict | None = None
-    var_enc: dict = {}
-    if codec is not None:
-        var_enc["compressors"] = _make_compressor(codec, level)
-    if chunks is not None:
-        var_enc["chunks"] = chunks
-    if var_enc:
-        encoding = dict.fromkeys(ds.data_vars, var_enc)
+    try:
+        encoding: dict | None = None
+        var_enc: dict = {}
+        if codec is not None:
+            var_enc["compressors"] = _make_compressor(codec, level)
+        if chunks is not None:
+            var_enc["chunks"] = chunks
+        if var_enc:
+            encoding = {var: dict(var_enc) for var in ds.data_vars}
 
-    ds.to_zarr(output_path, zarr_format=3, encoding=encoding)
-    ds.close()
+        ds.to_zarr(output_path, zarr_format=3, encoding=encoding)
+    finally:
+        ds.close()
 
 
 def _make_compressor(codec: str, level: int | None) -> list | None:

@@ -7,22 +7,37 @@ from urllib.parse import urlparse
 
 import wasmtime
 
+from chonkle.wasm_download import download_https, download_oci
 
-def resolve_wasm_uri(uri: str) -> Path:
+
+def resolve_wasm_uri(uri: str, *, force_download: bool = False) -> Path:
     """Resolve a WASM URI to an absolute file path.
 
-    Currently only ``file://`` URIs are supported.  Other schemes (e.g.
-    ``oci://``) will be added as registry support is implemented.
+    Supported URI forms:
+
+    * ``file:///path/to/codec.wasm`` -- local file
+    * ``https://…`` -- HTTPS download (cached)
+    * ``oci://ghcr.io/org/repo:tag`` -- OCI registry pull (cached)
     """
     parsed = urlparse(uri)
 
     if parsed.scheme == "file":
         return Path(parsed.path)
 
+    if parsed.scheme == "http":
+        msg = "HTTP is not supported for WASM downloads; use HTTPS instead"
+        raise ValueError(msg)
+
+    if parsed.scheme == "https":
+        return download_https(uri, force=force_download)
+
+    if parsed.scheme == "oci":
+        return download_oci(uri, force=force_download)
+
     msg = (
         f"Unsupported URI scheme: {parsed.scheme!r}"
         if parsed.scheme
-        else (f"URI must include a scheme (e.g. file://): {uri!r}")
+        else f"URI must include a scheme (e.g. file://, https://, oci://): {uri!r}"
     )
     raise NotImplementedError(msg)
 
@@ -60,6 +75,16 @@ def _wasm_call(
 
     # Get exported functions and memory.
     exports = instance.exports(store)
+
+    # Validate required ABI exports before accessing them.
+    required = ["alloc", "dealloc", "memory", export_name]
+    missing = [name for name in required if exports.get(name) is None]
+    if missing:
+        msg = (
+            f"WASM module is missing required ABI export(s): {', '.join(missing)}. "
+            f"Module at {resolved}"
+        )
+        raise RuntimeError(msg)
 
     # WASI reactors export _initialize for runtime setup.
     initialize_fn = exports.get("_initialize")

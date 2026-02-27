@@ -1,8 +1,13 @@
 """CLI entry point for chonkle."""
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
+
+import numpy as np
+
+from chonkle.pipeline import decode, encode, get_codecs
 
 
 def main() -> None:
@@ -180,6 +185,8 @@ def _run_cog(args: argparse.Namespace) -> None:
 
             download_cog(args.url, args.output)
         elif args.cog_command == "to-zarr":
+            if args.level is not None and args.codec is None:
+                sys.stderr.write("Warning: --level has no effect without --codec\n")
             from chonkle.cog.convert import cog_to_zarr
 
             cog_to_zarr(
@@ -208,11 +215,9 @@ def _run_cog(args: argparse.Namespace) -> None:
 
 def _run_decode(args: argparse.Namespace) -> None:
     """Decode a chunk and print or save the result."""
-    import numpy as np
-
-    from chonkle.pipeline import decode, get_codecs
-
-    pipeline_path = args.pipeline or Path(str(args.chunk_path) + ".json")
+    pipeline_path = args.pipeline or args.chunk_path.parent / (
+        args.chunk_path.name + ".json"
+    )
     codec_specs = get_codecs(pipeline_path)
     data = args.chunk_path.read_bytes()
     arr = decode(data, codec_specs)
@@ -229,15 +234,9 @@ def _run_decode(args: argparse.Namespace) -> None:
 
 def _run_encode(args: argparse.Namespace) -> None:
     """Encode a .npy array through a codec pipeline."""
-    import shutil
-
-    import numpy as np
-
-    from chonkle.pipeline import encode, get_codecs
-
     arr = np.load(args.input)
 
-    sidecar = Path(str(args.output) + ".json")
+    sidecar = args.output.parent / (args.output.name + ".json")
     pipeline_path = args.pipeline if args.pipeline is not None else sidecar
 
     codec_specs = get_codecs(pipeline_path)
