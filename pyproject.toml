@@ -2,7 +2,7 @@
 name = "chonkle"
 description = "A codec pipeline library for encoding and decoding chunked array data"
 readme = "README.md"
-requires-python = ">=3.14.0"
+requires-python = ">=3.13"
 version = "0.0.0"
 dependencies = [
     "numcodecs",
