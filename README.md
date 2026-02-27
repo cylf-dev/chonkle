@@ -1,6 +1,6 @@
 # chonkle
 
-A codec pipeline library for decoding (and encoding) chunked array data from formats like Zarr and COG. Pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom codecs compiled to WebAssembly, which run at near-native speed inside a sandbox — portable, safe, and free from platform-specific build tooling. See [WASM.md](WASM.md) for details on how WASM codecs work.
+A codec pipeline library for decoding (and encoding) chunked array data from formats like Zarr and COG. Pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom codecs compiled to WebAssembly, which run at near-native speed inside a sandbox — portable, safe, and free from platform-specific build tooling. See [WASM.md](docs/WASM.md) for details on how WASM codecs work.
 
 ## Install
 
@@ -53,7 +53,7 @@ Each codec entry has:
 - `"configuration"` — codec-specific parameters
 - `"uri"` — (WASM only) URI of the `.wasm` module
 
-Python and WASM codec steps can be freely mixed in any order. For information on how WASM codecs work, see [WASM.md](WASM.md).
+Python and WASM codec steps can be freely mixed in any order. For information on how WASM codecs work, see [WASM.md](docs/WASM.md).
 
 ## Python API
 
@@ -133,6 +133,17 @@ Encode a `.npy` file through a codec pipeline:
 ```bash
 chonkle encode decoded.npy --pipeline tests/fixtures/chunks/cog/0.json -o reencoded
 ```
+
+## Configuration
+
+WASM codecs downloaded from HTTPS or OCI sources are cached locally to avoid redundant network requests.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `CHONKLE_CACHE_DIR` | Override the WASM module cache directory | `$TMPDIR/chonkle/wasm/` |
+| `CHONKLE_FORCE_DOWNLOAD` | Set to `1` to re-download cached WASM modules, bypassing the local cache. Primarily useful for testing and development | unset |
+
+`$TMPDIR` is the OS temporary directory (e.g. `/tmp` on Linux, `/var/folders/...` on macOS). Run `echo $TMPDIR` to see the value on your system.
 
 ## Acknowledgements
 

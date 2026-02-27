@@ -1,6 +1,7 @@
 """Download WASM codec modules from HTTPS URLs and OCI registries."""
 
 import hashlib
+import logging
 import os
 import shutil
 import tempfile
@@ -91,7 +92,18 @@ def download_oci(
 
     ref_dir.mkdir(parents=True, exist_ok=True)
     client = oras.client.OrasClient()
-    files = client.pull(target=ref, outdir=str(ref_dir))
+
+    # The oras library reads ~/.docker/config.json and tries credential
+    # helpers (e.g. docker-credential-desktop) before falling back to
+    # anonymous access. For public registries this always fails and logs
+    # noisy warnings. Suppress them during the pull.
+    oras_logger = logging.getLogger("oras")
+    prev_level = oras_logger.level
+    oras_logger.setLevel(logging.ERROR)
+    try:
+        files = client.pull(target=ref, outdir=str(ref_dir))
+    finally:
+        oras_logger.setLevel(prev_level)
 
     wasm_files = [Path(f) for f in files if f.endswith(".wasm")]
     if not wasm_files:

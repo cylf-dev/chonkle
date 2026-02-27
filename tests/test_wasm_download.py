@@ -1,4 +1,5 @@
 import io
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,11 +24,15 @@ def _fake_response(data: bytes) -> MagicMock:
 
 
 class TestGetCacheDir:
-    def test_default_uses_tempdir(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_uses_tempdir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.delenv("CHONKLE_CACHE_DIR", raising=False)
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.setattr(tempfile, "tempdir", None)
         result = get_cache_dir()
-        assert "chonkle" in str(result)
-        assert "wasm" in str(result)
+        assert result == tmp_path / "chonkle" / "wasm"
+        assert result.exists()
 
     def test_env_var_override(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
