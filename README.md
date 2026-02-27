@@ -51,7 +51,7 @@ Each codec entry has:
 - `"name"` — codec identifier (for numcodecs lookup and human readability)
 - `"type"` — `"numcodecs"` or `"wasm"`
 - `"configuration"` — codec-specific parameters
-- `"uri"` — (WASM only) URI of the `.wasm` module
+- `"uri"` — (WASM only) URI of the `.wasm` module: `file://`, `https://`, or `oci://`
 
 Python and WASM codec steps can be freely mixed in any order. For information on how WASM codecs work, see [WASM.md](docs/WASM.md).
 
