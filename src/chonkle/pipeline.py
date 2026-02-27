@@ -16,7 +16,7 @@ Direction = Literal["encode", "decode"]
 def get_codecs(source: Path | dict[str, Any]) -> list[dict[str, Any]]:
     """Extract codec specs from a pipeline definition.
 
-    *source* may be a Path to a JSON file or a dict, both expected to
+    'source' may be a Path to a JSON file or a dict, both expected to
     contain a "codecs" key.
     """
     if isinstance(source, Path):
@@ -35,7 +35,7 @@ def get_codecs(source: Path | dict[str, Any]) -> list[dict[str, Any]]:
 def decode(data: bytes, codecs: list[dict[str, Any]]) -> np.ndarray:
     """Decode raw bytes through a codec pipeline, returning an ndarray.
 
-    Codecs are applied in **reverse order**, unwinding the encoding.
+    Codecs are applied in reverse order, unwinding the encoding.
     """
     result: bytes | np.ndarray = data
 
@@ -52,7 +52,7 @@ def decode(data: bytes, codecs: list[dict[str, Any]]) -> np.ndarray:
 def encode(data: np.ndarray, codecs: list[dict[str, Any]]) -> bytes:
     """Encode an ndarray through a codec pipeline, returning raw bytes.
 
-    Codecs are applied in **forward order**.
+    Codecs are applied in forward order.
     """
     result: bytes | np.ndarray = data
 

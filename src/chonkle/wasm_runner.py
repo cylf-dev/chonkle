@@ -15,9 +15,9 @@ def resolve_wasm_uri(uri: str, *, force_download: bool = False) -> Path:
 
     Supported URI forms:
 
-    * ``file:///path/to/codec.wasm`` -- local file
-    * ``https://…`` -- HTTPS download (cached)
-    * ``oci://ghcr.io/org/repo:tag`` -- OCI registry pull (cached)
+    - file:///path/to/codec.wasm (local file)
+    - https://… (HTTPS download, cached)
+    - oci://ghcr.io/org/repo:tag (OCI registry pull, cached)
     """
     parsed = urlparse(uri)
 
@@ -52,10 +52,10 @@ def _wasm_call(
 
     The module must export the generic WASM codec ABI:
 
-    * ``alloc(size: i32) -> i32``
-    * ``dealloc(ptr: i32, size: i32)``
-    * ``<export_name>(input_ptr, input_len, config_ptr, config_len) -> i64``
-    * ``memory``
+    - alloc(size: i32) -> i32
+    - dealloc(ptr: i32, size: i32)
+    - <export_name>(input_ptr, input_len, config_ptr, config_len) -> i64
+    - memory
 
     Both freestanding (no imports) and WASI modules are supported.
     """
@@ -129,10 +129,10 @@ def _wasm_call(
 
 
 def wasm_decode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
-    """Decode *data* using the WASM codec module at *wasm_path*."""
+    """Decode 'data' using the WASM codec module at 'wasm_path'."""
     return _wasm_call(wasm_path, "decode", data, configuration)
 
 
 def wasm_encode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
-    """Encode *data* using the WASM codec module at *wasm_path*."""
+    """Encode 'data' using the WASM codec module at 'wasm_path'."""
     return _wasm_call(wasm_path, "encode", data, configuration)

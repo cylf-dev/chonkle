@@ -14,8 +14,8 @@ import oras.client
 def get_cache_dir() -> Path:
     """Return the directory for cached .wasm downloads.
 
-    Uses ``CHONKLE_CACHE_DIR`` if set, otherwise falls back to a
-    ``chonkle/wasm`` subdirectory inside the OS temporary directory.
+    Uses CHONKLE_CACHE_DIR if set, otherwise falls back to a
+    chonkle/wasm subdirectory inside the OS temporary directory.
     """
     override = os.environ.get("CHONKLE_CACHE_DIR", "")
     if override:
@@ -27,17 +27,17 @@ def get_cache_dir() -> Path:
 
 
 def _should_force() -> bool:
-    """Check whether ``CHONKLE_FORCE_DOWNLOAD`` is set."""
+    """Check whether CHONKLE_FORCE_DOWNLOAD is set."""
     return os.environ.get("CHONKLE_FORCE_DOWNLOAD", "") == "1"
 
 
 def download_https(
     url: str, *, cache_dir: Path | None = None, force: bool = False
 ) -> Path:
-    """Download a ``.wasm`` file from an HTTPS URL, returning the cached path.
+    """Download a .wasm file from an HTTPS URL, returning the cached path.
 
-    The file is cached by a SHA-256 hash of the URL.  Pass *force* (or set
-    ``CHONKLE_FORCE_DOWNLOAD=1``) to re-download even when a cached copy
+    The file is cached by a SHA-256 hash of the URL. Pass 'force' (or set
+    CHONKLE_FORCE_DOWNLOAD=1) to re-download even when a cached copy
     exists.
     """
     if cache_dir is None:
@@ -69,13 +69,13 @@ def download_https(
 def download_oci(
     uri: str, *, cache_dir: Path | None = None, force: bool = False
 ) -> Path:
-    """Download a ``.wasm`` file from an OCI registry, returning the cached path.
+    """Download a .wasm file from an OCI registry, returning the cached path.
 
-    *uri* should include the ``oci://`` scheme prefix, e.g.
-    ``oci://ghcr.io/cylf-dev/tiff-predictor-2-c:v0.1.0``.
+    'uri' should include the oci:// scheme prefix, e.g.
+    oci://ghcr.io/cylf-dev/tiff-predictor-2-c:v0.1.0.
 
-    The file is cached by the OCI reference.  Pass *force* (or set
-    ``CHONKLE_FORCE_DOWNLOAD=1``) to re-download even when a cached copy
+    The file is cached by the OCI reference. Pass 'force' (or set
+    CHONKLE_FORCE_DOWNLOAD=1) to re-download even when a cached copy
     exists.
     """
     if cache_dir is None:
