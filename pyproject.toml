@@ -11,14 +11,6 @@ dependencies = [
     "wasmtime",
 ]
 
-[project.optional-dependencies]
-cog = [
-    "rioxarray",
-    "tifffile",
-    "xarray",
-    "zarr>=3",
-]
-
 [project.scripts]
 chonkle = "chonkle.cli:main"
 

@@ -12,10 +12,10 @@ Clone the repo and install dependencies:
 ```bash
 git clone git@github.com:cylf-dev/chonkle.git
 cd chonkle
-uv sync --all-extras
+uv sync
 ```
 
-This creates a virtualenv in `.venv/` and installs all dependencies (including dev tools and the `cog` extra needed for the full test suite).
+This creates a virtualenv in `.venv/` and installs all dependencies (including dev tools).
 
 Set up pre-commit hooks:
 

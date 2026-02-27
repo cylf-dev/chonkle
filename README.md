@@ -10,12 +10,6 @@ Requires [uv](https://docs.astral.sh/uv/).
 uv sync
 ```
 
-For COG operations (download, inspect, convert to Zarr), install with the `cog` extra:
-
-```bash
-uv sync --extra cog
-```
-
 ## How codec pipelines work
 
 Each chunk has a sidecar JSON file that describes the codec pipeline used to encode it:
@@ -138,24 +132,6 @@ Encode a `.npy` file through a codec pipeline:
 
 ```bash
 chonkle encode decoded.npy --pipeline tests/fixtures/chunks/cog/0.json -o reencoded
-```
-
-### COG operations
-
-Utility commands for fetching and inspecting COG files and creating test chunks from them. Requires the `cog` extra (`uv sync --extra cog`).
-
-```bash
-# Download a COG from a public URL
-chonkle cog download https://example.com/image.tif
-
-# Convert a local COG to Zarr v3
-chonkle cog to-zarr image.tif image.zarr
-
-# Print TIFF metadata
-chonkle cog metadata image.tif
-
-# Extract a single tile as raw bytes
-chonkle cog extract-tile image.tif 0
 ```
 
 ## Acknowledgements
