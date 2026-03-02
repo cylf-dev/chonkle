@@ -60,7 +60,9 @@ def _wasm_call(
     Both freestanding (no imports) and WASI modules are supported.
     """
     resolved = wasm_path.resolve()
-    engine = wasmtime.Engine()
+    config = wasmtime.Config()
+    config.cache = True
+    engine = wasmtime.Engine(config)
     module = wasmtime.Module.from_file(engine, str(resolved))
     store = wasmtime.Store(engine)
 

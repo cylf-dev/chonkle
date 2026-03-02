@@ -12,21 +12,23 @@ Downloaded `.wasm` files are cached on disk to avoid redundant network fetches. 
 - **Force re-download**: `CHONKLE_FORCE_DOWNLOAD=1` or `force=True` parameter
 - **Atomic writes**: HTTPS downloads use tempfile + rename to avoid partial files
 
-There is no eviction, TTL, or size management. The default `$TMPDIR` location is cleaned by the OS periodically, Wasm modules are small (typically KBs), and the force-download escape hatch exists for stale cache scenarios. This may need revisiting if the library moves to longer-lived deployment targets.
+There is no eviction, TTL, or size management. However, Wasm modules are small (typically KBs), the default `$TMPDIR` location is cleaned by the OS periodically, and the force-download provides an escape hatch for stale cache scenarios. A more robust cache can be implemented in the future if needed.
 
-## wasmtime Engine/Module reuse
+## wasmtime compiled-code disk cache
 
-Currently, every call to `_wasm_call` in `wasm_runner.py` creates a fresh `wasmtime.Engine`, compiles the `Module` from the `.wasm` file, creates a `Store`, and instantiates the module. Nothing is reused across calls.
+Every call to `_wasm_call` in `wasm_runner.py` creates a `wasmtime.Engine` and calls `Module.from_file()`, which compiles Wasm bytecode to native machine code. This is the most expensive per-call overhead in the Wasm path.
 
-`Module.from_file()` compiles Wasm bytecode to native code, which is the most expensive operation in the pipeline. For the current CLI usage (one chunk per invocation), this doesn't matter. For a service processing many chunks, caching the `Engine` and compiled `Module` would likely be the single highest-impact optimization.
+To avoid this repeated compilation, the Engine is configured with wasmtime's built-in compiled-code cache (`config.cache = True`). wasmtime transparently stores compiled native code on disk. When `Module.from_file()` is called for a `.wasm` file that has already been compiled with the same wasmtime version, the cached native code is loaded instead of recompiling.
 
-Some notes if we get there:
+This is separate from the download cache above: the download cache stores `.wasm` files to avoid network fetches, while the compilation cache stores native machine code to avoid recompilation.
 
-- `Engine` and `Module` are immutable and thread-safe — good candidates for caching
-- `Store` and `Instance` hold mutable per-call state (linear memory, globals) — these must stay per-call
-- wasmtime supports `Module.serialize()` / `Module.deserialize()` for persisting compiled native code to disk
-- A module-level `dict` or `functools.lru_cache` keyed by resolved file path would likely cover most of the benefit
+wasmtime manages the cache location and eviction automatically (`~/.cache` on Linux, `~/Library/Caches` on macOS). The cache invalidates automatically when the wasmtime version changes.
 
-## Codec object recreation
+## Warm-container deployments
 
-Pipeline codec objects (both numcodecs and Wasm) are created fresh on every `encode()`/`decode()` call. numcodecs objects are cheap to create, and statelessness keeps correctness simple. The real cost in the Wasm path is module compilation (above), not object creation. We don't see a reason to cache codec objects.
+The compiled-code disk cache still requires reading the cached native code from disk on each process invocation. In warm-container environments (e.g. AWS Lambda), the same process handles multiple invocations, so caching the `Engine` and compiled `Module` objects in Python module-level variables would skip that disk read on subsequent invocations within the same container.
+
+- `Engine` and `Module` are immutable — safe to reuse across calls with no risk of state leaking between invocations
+- The `Engine` only needs a single instance (singleton) since the compilation settings don't vary
+- A module-level `dict` keyed by resolved file path would cache compiled `Module` objects (one per `.wasm` file)
+- `Store` and `Instance` hold mutable state (the Wasm linear memory) — these must be fresh per-call
