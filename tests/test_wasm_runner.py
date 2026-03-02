@@ -53,7 +53,7 @@ class TestResolveWasmUri:
 
 class TestWasmDecode:
     def test_small_uint16_array(self) -> None:
-        """Encode with Python, decode with WASM, verify roundtrip."""
+        """Encode with Python, decode with Wasm, verify roundtrip."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -89,7 +89,7 @@ class TestWasmDecode:
 
 class TestWasmEncode:
     def test_small_uint16_array(self) -> None:
-        """Encode with WASM, decode with Python, verify roundtrip."""
+        """Encode with Wasm, decode with Python, verify roundtrip."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -107,7 +107,7 @@ class TestWasmEncode:
         np.testing.assert_array_equal(result, arr)
 
     def test_small_uint8_array(self) -> None:
-        """Encode with WASM, decode with Python, verify roundtrip."""
+        """Encode with Wasm, decode with Python, verify roundtrip."""
         codec = TiffPredictor2()
         arr = np.array([[1, 3, 6, 10], [200, 198, 195, 199]], dtype=np.uint8)
 
@@ -122,7 +122,7 @@ class TestWasmEncode:
         np.testing.assert_array_equal(result, arr)
 
     def test_wasm_encode_matches_python_encode(self) -> None:
-        """WASM encode produces identical output to Python encode."""
+        """Wasm encode produces identical output to Python encode."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -144,7 +144,7 @@ class TestWasmEncode:
 
 class TestWasmRoundtrip:
     def test_encode_then_decode(self) -> None:
-        """WASM encode followed by WASM decode returns original data."""
+        """Wasm encode followed by Wasm decode returns original data."""
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
             dtype=np.uint16,
@@ -158,7 +158,7 @@ class TestWasmRoundtrip:
         np.testing.assert_array_equal(result, arr)
 
     def test_decode_then_encode(self) -> None:
-        """WASM decode followed by WASM encode returns original data."""
+        """Wasm decode followed by Wasm encode returns original data."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],

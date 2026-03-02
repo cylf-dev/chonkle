@@ -1,6 +1,6 @@
 # chonkle
 
-A codec pipeline library for decoding (and encoding) chunked array data from formats like Zarr and COG. Pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom codecs compiled to WebAssembly, which run at near-native speed inside a sandbox — portable, safe, and free from platform-specific build tooling. See [WASM.md](docs/WASM.md) for details on how WASM codecs work.
+A codec pipeline library for decoding (and encoding) chunked array data from formats like Zarr and COG. Pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom codecs compiled to WebAssembly, which run at near-native speed inside a sandbox — portable, safe, and free from platform-specific build tooling. See [WASM.md](docs/WASM.md) for details on how Wasm codecs work.
 
 ## Install
 
@@ -51,9 +51,9 @@ Each codec entry has:
 - `"name"` — codec identifier (for numcodecs lookup and human readability)
 - `"type"` — `"numcodecs"` or `"wasm"`
 - `"configuration"` — codec-specific parameters
-- `"uri"` — (WASM only) URI of the `.wasm` module: `file://`, `https://`, or `oci://`
+- `"uri"` — (Wasm only) URI of the `.wasm` module: `file://`, `https://`, or `oci://`
 
-Python and WASM codec steps can be freely mixed in any order. For information on how WASM codecs work, see [WASM.md](docs/WASM.md).
+Python and Wasm codec steps can be freely mixed in any order. For information on how Wasm codecs work, see [WASM.md](docs/WASM.md).
 
 ## Python API
 
@@ -136,12 +136,12 @@ chonkle encode decoded.npy --pipeline tests/fixtures/chunks/cog/0.json -o reenco
 
 ## Configuration
 
-WASM codecs downloaded from HTTPS or OCI sources are cached locally to avoid redundant network requests.
+Wasm codecs downloaded from HTTPS or OCI sources are cached locally to avoid redundant network requests.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `CHONKLE_CACHE_DIR` | Override the WASM module cache directory | `$TMPDIR/chonkle/wasm/` |
-| `CHONKLE_FORCE_DOWNLOAD` | Set to `1` to re-download cached WASM modules, bypassing the local cache. Primarily useful for testing and development | unset |
+| `CHONKLE_CACHE_DIR` | Override the Wasm module cache directory | `$TMPDIR/chonkle/wasm/` |
+| `CHONKLE_FORCE_DOWNLOAD` | Set to `1` to re-download cached Wasm modules, bypassing the local cache. Primarily useful for testing and development | unset |
 
 `$TMPDIR` is the OS temporary directory (e.g. `/tmp` on Linux, `/var/folders/...` on macOS). Run `echo $TMPDIR` to see the value on your system.
 

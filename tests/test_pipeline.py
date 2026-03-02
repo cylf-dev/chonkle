@@ -40,7 +40,7 @@ class TestDecode:
 
 class TestDecodeWasm:
     def test_wasm_decode_matches_native(self, tmp_path: Path) -> None:
-        """WASM TiffPredictor2 produces identical output to native."""
+        """Wasm TiffPredictor2 produces identical output to native."""
         native = _decode_fixture(FIXTURES_DIR / "cog" / "0")
 
         # Build a temporary fixture with a fully-qualified file:// URI

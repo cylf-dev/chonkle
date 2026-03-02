@@ -1,4 +1,4 @@
-"""Load and run WASM codec modules via the generic codec ABI."""
+"""Load and run Wasm codec modules via the generic codec ABI."""
 
 import json
 from pathlib import Path
@@ -11,7 +11,7 @@ from chonkle.wasm_download import download_https, download_oci
 
 
 def resolve_wasm_uri(uri: str, *, force_download: bool = False) -> Path:
-    """Resolve a WASM URI to an absolute file path.
+    """Resolve a Wasm URI to an absolute file path.
 
     Supported URI forms:
 
@@ -25,7 +25,7 @@ def resolve_wasm_uri(uri: str, *, force_download: bool = False) -> Path:
         return Path(parsed.path)
 
     if parsed.scheme == "http":
-        msg = "HTTP is not supported for WASM downloads; use HTTPS instead"
+        msg = "HTTP is not supported for Wasm downloads; use HTTPS instead"
         raise ValueError(msg)
 
     if parsed.scheme == "https":
@@ -48,9 +48,9 @@ def _wasm_call(
     data: bytes,
     configuration: dict,
 ) -> bytes:
-    """Call a WASM codec export and return the result bytes.
+    """Call a Wasm codec export and return the result bytes.
 
-    The module must export the generic WASM codec ABI:
+    The module must export the generic Wasm codec ABI:
 
     - alloc(size: i32) -> i32
     - dealloc(ptr: i32, size: i32)
@@ -81,7 +81,7 @@ def _wasm_call(
     missing = [name for name in required if exports.get(name) is None]
     if missing:
         msg = (
-            f"WASM module is missing required ABI export(s): {', '.join(missing)}. "
+            f"Wasm module is missing required ABI export(s): {', '.join(missing)}. "
             f"Module at {resolved}"
         )
         raise RuntimeError(msg)
@@ -95,12 +95,12 @@ def _wasm_call(
     codec_fn = cast(wasmtime.Func, exports[export_name])
     memory = cast(wasmtime.Memory, exports["memory"])
 
-    # Write input data into WASM linear memory.
+    # Write input data into Wasm linear memory.
     input_len = len(data)
     input_ptr = alloc_fn(store, input_len)
     memory.write(store, data, input_ptr)
 
-    # Write configuration JSON into WASM linear memory.
+    # Write configuration JSON into Wasm linear memory.
     config_bytes = json.dumps(configuration).encode()
     config_len = len(config_bytes)
     config_ptr = alloc_fn(store, config_len)
@@ -114,13 +114,13 @@ def _wasm_call(
     out_len = result_i64 & 0xFFFFFFFF
 
     if out_ptr == 0 and out_len == 0:
-        msg = f"WASM {export_name} returned null (bad configuration?)"
+        msg = f"Wasm {export_name} returned null (bad configuration?)"
         raise RuntimeError(msg)
 
-    # Read output from WASM memory.
+    # Read output from Wasm memory.
     output = memory.read(store, out_ptr, out_ptr + out_len)
 
-    # Free all WASM-side allocations.
+    # Free all Wasm-side allocations.
     dealloc_fn(store, input_ptr, input_len)
     dealloc_fn(store, config_ptr, config_len)
     dealloc_fn(store, out_ptr, out_len)
@@ -129,10 +129,10 @@ def _wasm_call(
 
 
 def wasm_decode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
-    """Decode 'data' using the WASM codec module at 'wasm_path'."""
+    """Decode 'data' using the Wasm codec module at 'wasm_path'."""
     return _wasm_call(wasm_path, "decode", data, configuration)
 
 
 def wasm_encode(wasm_path: Path, data: bytes, configuration: dict) -> bytes:
-    """Encode 'data' using the WASM codec module at 'wasm_path'."""
+    """Encode 'data' using the Wasm codec module at 'wasm_path'."""
     return _wasm_call(wasm_path, "encode", data, configuration)

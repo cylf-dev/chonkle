@@ -1,4 +1,4 @@
-"""Download WASM codec modules from HTTPS URLs and OCI registries."""
+"""Download Wasm codec modules from HTTPS URLs and OCI registries."""
 
 import hashlib
 import logging

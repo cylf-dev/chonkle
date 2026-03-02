@@ -109,11 +109,11 @@ def _apply_wasm(
     data: bytes | np.ndarray,
     direction: Direction,
 ) -> bytes | np.ndarray:
-    """Apply one step using a WASM codec module."""
+    """Apply one step using a Wasm codec module."""
     wasm_path = resolve_wasm_uri(codec_spec["uri"])
     config = codec_spec.get("configuration", {})
 
-    # WASM operates on raw bytes.  If the pipeline handed us an ndarray,
+    # Wasm operates on raw bytes.  If the pipeline handed us an ndarray,
     # convert to bytes and reconstruct the array from the output.
     dtype: np.dtype | None = None
     shape: tuple[int, ...] | None = None
