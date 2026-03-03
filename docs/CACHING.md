@@ -26,7 +26,7 @@ wasmtime manages the cache location and eviction automatically (`~/.cache` on Li
 
 ## Warm-container deployments
 
-The compiled-code disk cache still requires reading the cached native code from disk on each process invocation. In warm-container environments (e.g. AWS Lambda), the same process handles multiple invocations, so caching the `Engine` and compiled `Module` objects in Python module-level variables would skip that disk read on subsequent invocations within the same container.
+The compiled-code disk cache eliminates recompilation, but each new process invocation still reads the cached file from disk. In warm-container environments (e.g. AWS Lambda), the same process handles multiple invocations, so caching the `Engine` and compiled `Module` objects in Python module-level variables would skip that disk read on subsequent invocations within the same container.
 
 - `Engine` and `Module` are immutable — safe to reuse across calls with no risk of state leaking between invocations
 - The `Engine` only needs a single instance (singleton) since the compilation settings don't vary

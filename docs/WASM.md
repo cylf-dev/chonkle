@@ -1,27 +1,23 @@
 # Running Custom Codecs with WebAssembly
 
-## What is WebAssembly?
+This document covers how chonkle uses WebAssembly for custom codecs. For general Wasm knowledge, see the knowledge base:
 
-WebAssembly (Wasm) is a specification for a CPU that doesn't physically exist. It defines an instruction set — the operations this CPU can perform (things like "add two integers" or "load a byte from memory") — along with how it executes them and how its memory is organized. A `.wasm` file is a program composed of these operations — bytecode targeting this virtual CPU rather than any real hardware. Languages like C, C++, and Rust can compile to Wasm instead of to a physical CPU's instruction set, producing `.wasm` files.
-
-A program that implements the virtual CPU is called a "runtime." The simplest approach would be for the runtime to interpret the `.wasm` bytecode instruction by instruction, but that would be slow. Instead, modern runtimes like [Wasmtime](https://wasmtime.dev/) compile the bytecode to native machine code for the host CPU before running it. The actual execution runs native instructions, which is why Wasm achieves near-native speed. This compilation step takes time (it is the most expensive overhead when loading a module), but it only needs to happen once per `.wasm` file — runtimes can cache the compiled output on disk and reuse it across runs (see [CACHING.md](CACHING.md)). The compiled output is specific to the host CPU architecture, but the `.wasm` bytecode itself remains portable.
-
-Because `.wasm` operations target a virtual CPU rather than a specific physical one, the same `.wasm` file is portable across any OS and architecture. And because execution goes through the runtime, the runtime can enforce strict safety guarantees like memory isolation.
-
-Wasm is often called a "virtual machine," but it's a different kind than the hypervisor kind (VMware, VirtualBox, EC2). Those virtualize an entire computer — CPU, memory, disk, network — so a full guest OS can boot inside. Wasm virtualizes just a CPU — the virtual CPU described above — with no OS, no virtual disk, and no boot process. Python works the same way — `.pyc` files are bytecode for CPython's virtual machine. The JVM (Java Virtual Machine) is another example.
-
-Wasm was originally created for web browsers, where the runtime is built into the browser itself. But the same properties turned out to be valuable outside of browsers too. Standalone runtimes like [Wasmtime](https://wasmtime.dev/) can run `.wasm` modules outside the browser — either as standalone programs (the module has a `main` entry point and the runtime runs it) or as libraries (the host program loads the module and calls its exported functions on demand). This project uses Wasm in the library sense: Python loads a `.wasm` codec module through Wasmtime and calls its exported functions (`alloc`, `encode` or `decode`, `dealloc`) as needed.
+- [What is WebAssembly?](wasm/OVERVIEW.md) — virtual CPU, runtimes, portability
+- [WASI](wasm/WASI.md) — system interface, `wasm32-wasi` target, command vs reactor
+- [Linear memory](wasm/MEMORY.md) — memory growth, `dlmalloc`, buffer strategies
+- [Distribution](DISTRIBUTION.md) — remote storage options for `.wasm` files
+- [Codec ABI](CODEC_ABI.md) — the interface contract between host and `.wasm` codec modules
 
 ## Why Wasm and Python?
 
 ### Why Wasm for custom codecs?
 
-Custom codecs need to be fast, portable, and safe. The traditional options for fast codecs — C extensions or Cython — require platform-specific compilation and complex build tooling. Worse, native code loaded into your process (via C extensions, shared libraries, etc.) runs with the same privileges as your program: it can read and write any of your process's memory, access the filesystem, and make network calls. There is no built-in boundary between your code and the native extension.
+Custom codecs should be fast, portable, and safe. The traditional options for fast codecs — C extensions or Cython — require platform-specific compilation and complex build tooling. Furthermore, native code loaded into your process (via C extensions, shared libraries, etc.) runs with the same privileges as your program: it can read and write any of your process's memory, access the filesystem, and make network calls. There is no built-in boundary between your code and the native extension.
 
 Wasm gives us all three properties:
 
 - **Fast:** Compiled C/Rust code runs at near-native speed.
-- **Portable:** The same `.wasm` binary runs on any OS and architecture without recompilation.
+- **Portable:** The same `.wasm` binary runs on any OS and architecture — the runtime compiles it to native code, so codec authors distribute one file instead of per-platform builds.
 - **Safe:** The runtime's sandbox ensures a codec module can only access its own memory — it cannot touch the host process, the filesystem, or the network unless explicitly permitted.
 
 ### Why Python as the host?
@@ -80,35 +76,7 @@ Supported URI schemes: `file://`, `https://`, and `oci://`.
 
 ### The codec ABI
 
-An ABI (Application Binary Interface) defines how two separately compiled pieces of code talk to each other at the binary level — what functions exist, what types their arguments and return values have, and how memory is laid out. Here, the ABI is the contract between chonkle (the host) and a `.wasm` codec module: it specifies the exact functions the host expects to find and how data is passed back and forth through linear memory.
-
-Every Wasm codec module must export a `memory` and three functions. The `memory` export is the module's linear memory — a resizable byte array that the host reads from and writes to in order to pass data across the Wasm boundary. It is automatically provided by the compiler when you target `wasm32`; codec authors do not need to define it.
-
-The functions that codec authors must implement:
-
-| Export | Signature | Purpose |
-| --- | --- | --- |
-| `alloc` | `(size: i32) -> i32` | Allocate `size` bytes, return a pointer |
-| `dealloc` | `(ptr: i32, size: i32)` | Free a previously allocated buffer |
-| `decode` | `(input_ptr: i32, input_len: i32, config_ptr: i32, config_len: i32) -> i64` | Decode data; return packed result |
-| `encode` | `(input_ptr: i32, input_len: i32, config_ptr: i32, config_len: i32) -> i64` | Encode data; return packed result |
-
-A module may export `decode`, `encode`, or both. The host calls whichever function matches the pipeline direction.
-
-#### Calling convention
-
-The host (`wasm_runner.py`) performs the following sequence for each codec call (`decode` or `encode`):
-
-1. **Allocate and write input** — Call `alloc(len(data))`, then write the raw input bytes into linear memory at the returned pointer.
-2. **Allocate and write config** — Serialize the configuration dict as a JSON string, call `alloc(len(json_bytes))`, then write the JSON bytes into linear memory.
-3. **Call the codec function** (`decode` or `encode`) — Pass the four arguments: `input_ptr`, `input_len`, `config_ptr`, `config_len`.
-4. **Unpack the result** — The return value is a single `i64` encoding both the output pointer and length: `out_ptr = (result >> 32) & 0xFFFFFFFF`, `out_len = result & 0xFFFFFFFF`.
-5. **Read output** — Copy `out_len` bytes from linear memory starting at `out_ptr`.
-6. **Deallocate** — Call `dealloc` three times to free the input, config, and output buffers.
-
-#### Error signaling
-
-If the codec function returns `out_ptr = 0` and `out_len = 0`, the host treats this as a failure and raises a `RuntimeError`.
+See [CODEC_ABI.md](CODEC_ABI.md) for the full specification — exported functions, calling convention, and error signaling.
 
 ## Why Core Wasm over the Component Model?
 
