@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Python 3.14+**
+- **Python 3.13+**
 - **[uv](https://docs.astral.sh/uv/)** — Python package and project manager
 
 ## Setup

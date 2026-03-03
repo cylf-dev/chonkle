@@ -72,3 +72,8 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.15",
 ]
+notebook = [
+    "chunk-utils @ git+https://github.com/cylf-dev/chunk-utils.git@v0.1.0",
+    "ipykernel",
+    "matplotlib",
+]
