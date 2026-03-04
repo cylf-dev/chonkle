@@ -6,3 +6,6 @@
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+demo/data/
+**/.ipynb_checkpoints/
