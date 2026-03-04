@@ -7,4 +7,5 @@
 .mypy_cache/
 .ruff_cache/
 
-notebooks/data/
+demo/data/
+**/.ipynb_checkpoints/
