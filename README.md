@@ -18,17 +18,21 @@ Each chunk has a sidecar JSON file that describes the codec pipeline used to enc
 {
   "codecs": [
     {
-      "name": "tiff_predictor_2",
-      "type": "numcodecs",
-      "configuration": {}
-    },
-    {
       "name": "bytes",
       "type": "numcodecs",
       "configuration": {
         "endian": "little",
         "data_type": "uint16",
         "shape": [1024, 1024]
+      }
+    },
+    {
+      "name": "tiff_predictor_2",
+      "type": "wasm",
+      "uri": "file:///path/to/tiff-predictor-2-c.wasm",
+      "configuration": {
+        "bytes_per_sample": 2,
+        "width": 1024
       }
     },
     {
@@ -42,7 +46,7 @@ Each chunk has a sidecar JSON file that describes the codec pipeline used to enc
 }
 ```
 
-**Encoding** applies codecs in forward order (top to bottom): array → tiff_predictor_2 → bytes → zlib → compressed bytes.
+**Encoding** applies codecs in forward order (top to bottom): array → bytes → tiff_predictor_2 (Wasm) → zlib → compressed bytes.
 
 **Decoding** applies codecs in reverse order, unwinding the encoding.
 
@@ -94,45 +98,13 @@ from chonkle import encode
 encoded = encode(arr, codecs)
 ```
 
+## Demo
+
+See [demo/](demo/) for a Jupyter notebook demonstrating the full pipeline with a real Sentinel-2 COG tile.
+
 ## CLI
 
-After installing, the `chonkle` command is available:
-
-```bash
-chonkle --help
-```
-
-### Decode a chunk
-
-Each chunk requires a sidecar `.json` file describing its codec pipeline. `chonkle decode` applies the pipeline and prints a small excerpt of the result:
-
-```bash
-chonkle decode tests/fixtures/chunks/cog/0
-```
-
-```text
-Shape: (1024, 1024), dtype: uint16
-First 5x5:
-[[1236 1386 1405 1372 1491]
- [1246 1350 1271 1310 1303]
- [1348 1194 1154 1324 1256]
- [1172 1148 1251 1369 1376]
- [1174 1176 1219 1371 1420]]
-```
-
-Save the decoded array to a `.npy` file:
-
-```bash
-chonkle decode tests/fixtures/chunks/cog/0 -o decoded.npy
-```
-
-### Encode a .npy file
-
-Encode a `.npy` file through a codec pipeline:
-
-```bash
-chonkle encode decoded.npy --pipeline tests/fixtures/chunks/cog/0.json -o reencoded
-```
+A `chonkle` CLI is available for interactive use; run `chonkle --help` for usage.
 
 ## Configuration
 

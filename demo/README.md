@@ -7,13 +7,13 @@ using a real Sentinel-2 COG tile as test data.
 
 From the repo root:
 
-```
+```bash
 uv sync --group notebook --locked
 ```
 
 ## Running
 
-```
+```bash
 uv run jupyter lab --notebook-dir=demo
 ```
 
