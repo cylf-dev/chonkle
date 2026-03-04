@@ -309,8 +309,8 @@ dev = [
 ]
 notebook = [
     { name = "chunk-utils", git = "https://github.com/cylf-dev/chunk-utils.git?rev=v0.1.0" },
-    { name = "jupyterlab" },
-    { name = "matplotlib" },
+    { name = "jupyterlab", specifier = ">=4.5" },
+    { name = "matplotlib", specifier = ">=3.10" },
 ]
 
 [[package]]

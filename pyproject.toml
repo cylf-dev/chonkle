@@ -74,6 +74,6 @@ dev = [
 ]
 notebook = [
     "chunk-utils @ git+https://github.com/cylf-dev/chunk-utils.git@v0.1.0",
-    "jupyterlab",
-    "matplotlib",
+    "jupyterlab>=4.5",
+    "matplotlib>=3.10",
 ]

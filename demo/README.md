@@ -8,7 +8,7 @@ using a real Sentinel-2 COG tile as test data.
 From the repo root:
 
 ```
-uv sync --group notebook
+uv sync --group notebook --locked
 ```
 
 ## Running
