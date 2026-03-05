@@ -1,6 +1,6 @@
 # chonkle
 
-A codec pipeline library for decoding (and encoding) chunked array data from formats like Zarr and COG. Pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom codecs compiled to WebAssembly, which run at near-native speed inside a sandbox — portable, safe, and free from platform-specific build tooling. See [WASM.md](docs/WASM.md) for details on how Wasm codecs work.
+Chonkle is a demonstrator, built to explore WebAssembly (Wasm) as a codec delivery mechanism for chunked array formats like Zarr and COG. Pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom Wasm codecs that run at near-native speed inside a sandbox - portable, safe, and free from platform-specific build tooling. The library works, but should be treated as a learning artifact that will continue to evolve as our understanding of Wasm matures. See [WASM.md](docs/WASM.md) for details on how Wasm codecs work.
 
 ## Install
 
