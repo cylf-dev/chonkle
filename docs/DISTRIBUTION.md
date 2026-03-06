@@ -101,7 +101,7 @@ The Bytecode Alliance has developed [warg](https://warg.io/), a registry protoco
 
 warg and wa.dev are built around the [WebAssembly Component Model](https://component-model.bytecodealliance.org/), a higher-level abstraction on top of core WebAssembly. The registry expects artifacts to be Component Model components — a binary format distinct from plain wasm modules. Components declare typed interfaces using WIT (WebAssembly Interface Types), and the registry can index that metadata for discovery. Packages are addressed as `namespace:name@version` (a warg protocol convention), and even WIT interface definitions are compiled to wasm and published as packages.
 
-Our `.wasm` codecs are **plain wasm modules** — they export functions with a specific ABI but don't use WIT or the Component Model. While the lower-level `wkg oci` commands (which are just OCI pushes) could technically be used, the registry's discovery, metadata, and tooling wouldn't apply. We'd be working against the grain of the ecosystem.
+chonkle supports both **Core Wasm modules** and **Component Model components**. For Core modules, which don't use WIT or the Component Model, the lower-level `wkg oci` commands could technically be used, but the registry's discovery, metadata, and tooling wouldn't apply — we'd be working against the grain of the ecosystem. For Component codecs, warg/wa.dev is a better fit, though the tooling is still early-stage.
 
 ### Pros
 
@@ -112,10 +112,9 @@ Our `.wasm` codecs are **plain wasm modules** — they export functions with a s
 
 ### Cons
 
-- Oriented toward Component Model artifacts, not plain wasm modules
+- Oriented toward Component Model artifacts; Core Wasm modules don't benefit from its metadata or discovery
 - Still maturing — the original warg registry implementation is no longer actively developed, with work continuing in `wasm-pkg-tools`
 - Tooling and ecosystem are early-stage
-- Would require adopting the Component Model to fully benefit, which is a significant architectural change
 
 ## Comparison
 
@@ -137,6 +136,6 @@ Codec repositories use a single GitHub Actions workflow that publishes `.wasm` f
 - **GitHub Releases** — simple HTTP GET, no tooling required on the consumer side
 - **GHCR** — OCI-based distribution, aligned with where the Wasm ecosystem is heading
 
-**warg / wa.dev** would become relevant if the project adopts the Component Model for its codec interface. Until then, its Component Model orientation makes it a poor fit for distributing plain wasm modules.
+**warg / wa.dev** is a natural fit for distributing Component codecs (e.g. `componentize-py`-authored modules), but its tooling is still early-stage. For Core Wasm modules, which don't align with the Component Model registry model, it provides little benefit and adds complexity.
 
 **GitHub Packages** (npm, Maven, etc.) is not a good fit for this use case and can be ruled out.

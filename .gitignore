@@ -9,3 +9,5 @@
 
 demo/data/
 **/.ipynb_checkpoints/
+
+tests/fixtures/chunks/cog_wasm/*.wasm

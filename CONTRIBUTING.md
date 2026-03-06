@@ -29,6 +29,10 @@ uv run pre-commit install
 uv run pytest tests/ -v
 ```
 
+> **Note:** Wasm test fixtures are not committed to the repository. On the first run,
+> pytest automatically downloads them from GitHub Releases (~41 MB total).
+> Subsequent runs use the local copies.
+
 ## Linting and formatting
 
 Ruff is used for both linting and formatting:

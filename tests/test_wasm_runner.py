@@ -8,7 +8,8 @@ from chonkle.wasm_runner import resolve_wasm_uri, wasm_decode, wasm_encode
 
 from .conftest import FIXTURES_DIR
 
-WASM_PATH = FIXTURES_DIR / "cog_wasm" / "tiff-predictor-2-c.wasm"
+CORE_WASM_PATH = FIXTURES_DIR / "cog_wasm" / "tiff-predictor-2-c.wasm"
+COMPONENT_WASM_PATH = FIXTURES_DIR / "cog_wasm" / "tiff-predictor-2-python.wasm"
 
 
 class TestResolveWasmUri:
@@ -51,9 +52,11 @@ class TestResolveWasmUri:
         assert result == wasm
 
 
-class TestWasmDecode:
+class TestWasmCoreDecode:
+    pytestmark = pytest.mark.usefixtures("ensure_core_wasm")
+
     def test_small_uint16_array(self) -> None:
-        """Encode with Python, decode with Wasm, verify roundtrip."""
+        """Encode with Python, decode with Core Wasm, verify roundtrip."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -63,7 +66,7 @@ class TestWasmDecode:
         encoded_bytes = encoded.tobytes()
 
         result_bytes = wasm_decode(
-            WASM_PATH,
+            CORE_WASM_PATH,
             encoded_bytes,
             {"bytes_per_sample": 2, "width": 4},
         )
@@ -78,7 +81,7 @@ class TestWasmDecode:
         encoded_bytes = encoded.tobytes()
 
         result_bytes = wasm_decode(
-            WASM_PATH,
+            CORE_WASM_PATH,
             encoded_bytes,
             {"bytes_per_sample": 1, "width": 4},
         )
@@ -87,9 +90,11 @@ class TestWasmDecode:
         np.testing.assert_array_equal(result, arr)
 
 
-class TestWasmEncode:
+class TestWasmCoreEncode:
+    pytestmark = pytest.mark.usefixtures("ensure_core_wasm")
+
     def test_small_uint16_array(self) -> None:
-        """Encode with Wasm, decode with Python, verify roundtrip."""
+        """Encode with Core Wasm, decode with Python, verify roundtrip."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -97,7 +102,7 @@ class TestWasmEncode:
         )
 
         encoded_bytes = wasm_encode(
-            WASM_PATH,
+            CORE_WASM_PATH,
             arr.tobytes(),
             {"bytes_per_sample": 2, "width": 4},
         )
@@ -107,12 +112,12 @@ class TestWasmEncode:
         np.testing.assert_array_equal(result, arr)
 
     def test_small_uint8_array(self) -> None:
-        """Encode with Wasm, decode with Python, verify roundtrip."""
+        """Encode with Core Wasm, decode with Python, verify roundtrip."""
         codec = TiffPredictor2()
         arr = np.array([[1, 3, 6, 10], [200, 198, 195, 199]], dtype=np.uint8)
 
         encoded_bytes = wasm_encode(
-            WASM_PATH,
+            CORE_WASM_PATH,
             arr.tobytes(),
             {"bytes_per_sample": 1, "width": 4},
         )
@@ -121,8 +126,8 @@ class TestWasmEncode:
         result = codec.decode(encoded)
         np.testing.assert_array_equal(result, arr)
 
-    def test_wasm_encode_matches_python_encode(self) -> None:
-        """Wasm encode produces identical output to Python encode."""
+    def test_core_encode_matches_python_encode(self) -> None:
+        """Core Wasm encode produces identical output to Python encode."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -130,35 +135,37 @@ class TestWasmEncode:
         )
         python_encoded = codec.encode(arr)
 
-        wasm_encoded_bytes = wasm_encode(
-            WASM_PATH,
+        core_encoded_bytes = wasm_encode(
+            CORE_WASM_PATH,
             arr.tobytes(),
             {"bytes_per_sample": 2, "width": 4},
         )
-        wasm_encoded = np.frombuffer(wasm_encoded_bytes, dtype=np.uint16).reshape(
+        core_encoded = np.frombuffer(core_encoded_bytes, dtype=np.uint16).reshape(
             arr.shape
         )
 
-        np.testing.assert_array_equal(wasm_encoded, python_encoded)
+        np.testing.assert_array_equal(core_encoded, python_encoded)
 
 
-class TestWasmRoundtrip:
+class TestWasmCoreRoundtrip:
+    pytestmark = pytest.mark.usefixtures("ensure_core_wasm")
+
     def test_encode_then_decode(self) -> None:
-        """Wasm encode followed by Wasm decode returns original data."""
+        """Core Wasm encode followed by Core Wasm decode returns original data."""
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
             dtype=np.uint16,
         )
         config = {"bytes_per_sample": 2, "width": 4}
 
-        encoded_bytes = wasm_encode(WASM_PATH, arr.tobytes(), config)
-        decoded_bytes = wasm_decode(WASM_PATH, encoded_bytes, config)
+        encoded_bytes = wasm_encode(CORE_WASM_PATH, arr.tobytes(), config)
+        decoded_bytes = wasm_decode(CORE_WASM_PATH, encoded_bytes, config)
 
         result = np.frombuffer(decoded_bytes, dtype=np.uint16).reshape(arr.shape)
         np.testing.assert_array_equal(result, arr)
 
     def test_decode_then_encode(self) -> None:
-        """Wasm decode followed by Wasm encode returns original data."""
+        """Core Wasm decode followed by Core Wasm encode returns original data."""
         codec = TiffPredictor2()
         arr = np.array(
             [[10, 12, 15, 11], [100, 98, 95, 99]],
@@ -167,8 +174,118 @@ class TestWasmRoundtrip:
         differenced = codec.encode(arr)
         config = {"bytes_per_sample": 2, "width": 4}
 
-        decoded_bytes = wasm_decode(WASM_PATH, differenced.tobytes(), config)
-        reencoded_bytes = wasm_encode(WASM_PATH, decoded_bytes, config)
+        decoded_bytes = wasm_decode(CORE_WASM_PATH, differenced.tobytes(), config)
+        reencoded_bytes = wasm_encode(CORE_WASM_PATH, decoded_bytes, config)
 
         result = np.frombuffer(reencoded_bytes, dtype=np.uint16).reshape(arr.shape)
         np.testing.assert_array_equal(result, differenced)
+
+
+class TestWasmComponentDecode:
+    pytestmark = pytest.mark.usefixtures("ensure_component_wasm")
+
+    def test_small_uint16_array(self) -> None:
+        """Python encode → component decode → verify roundtrip."""
+        codec = TiffPredictor2()
+        arr = np.array(
+            [[10, 12, 15, 11], [100, 98, 95, 99]],
+            dtype=np.uint16,
+        )
+        encoded = codec.encode(arr)
+
+        result_bytes = wasm_decode(
+            COMPONENT_WASM_PATH,
+            encoded.tobytes(),
+            {"bytes_per_sample": 2, "width": 4},
+        )
+
+        result = np.frombuffer(result_bytes, dtype=np.uint16).reshape(arr.shape)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_small_uint8_array(self) -> None:
+        codec = TiffPredictor2()
+        arr = np.array([[1, 3, 6, 10], [200, 198, 195, 199]], dtype=np.uint8)
+        encoded = codec.encode(arr)
+
+        result_bytes = wasm_decode(
+            COMPONENT_WASM_PATH,
+            encoded.tobytes(),
+            {"bytes_per_sample": 1, "width": 4},
+        )
+
+        result = np.frombuffer(result_bytes, dtype=np.uint8).reshape(arr.shape)
+        np.testing.assert_array_equal(result, arr)
+
+
+class TestWasmComponentEncode:
+    pytestmark = pytest.mark.usefixtures("ensure_component_wasm")
+
+    def test_small_uint16_array(self) -> None:
+        """Component encode → Python decode → verify roundtrip."""
+        codec = TiffPredictor2()
+        arr = np.array(
+            [[10, 12, 15, 11], [100, 98, 95, 99]],
+            dtype=np.uint16,
+        )
+
+        encoded_bytes = wasm_encode(
+            COMPONENT_WASM_PATH,
+            arr.tobytes(),
+            {"bytes_per_sample": 2, "width": 4},
+        )
+
+        encoded = np.frombuffer(encoded_bytes, dtype=np.uint16).reshape(arr.shape)
+        result = codec.decode(encoded)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_small_uint8_array(self) -> None:
+        codec = TiffPredictor2()
+        arr = np.array([[1, 3, 6, 10], [200, 198, 195, 199]], dtype=np.uint8)
+
+        encoded_bytes = wasm_encode(
+            COMPONENT_WASM_PATH,
+            arr.tobytes(),
+            {"bytes_per_sample": 1, "width": 4},
+        )
+
+        encoded = np.frombuffer(encoded_bytes, dtype=np.uint8).reshape(arr.shape)
+        result = codec.decode(encoded)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_component_encode_matches_python_encode(self) -> None:
+        """Component encode produces identical output to Python encode."""
+        codec = TiffPredictor2()
+        arr = np.array(
+            [[10, 12, 15, 11], [100, 98, 95, 99]],
+            dtype=np.uint16,
+        )
+        python_encoded = codec.encode(arr)
+
+        component_encoded_bytes = wasm_encode(
+            COMPONENT_WASM_PATH,
+            arr.tobytes(),
+            {"bytes_per_sample": 2, "width": 4},
+        )
+        component_encoded = np.frombuffer(
+            component_encoded_bytes, dtype=np.uint16
+        ).reshape(arr.shape)
+
+        np.testing.assert_array_equal(component_encoded, python_encoded)
+
+
+class TestWasmComponentRoundtrip:
+    pytestmark = pytest.mark.usefixtures("ensure_component_wasm")
+
+    def test_encode_then_decode(self) -> None:
+        """Component encode followed by component decode returns original data."""
+        arr = np.array(
+            [[10, 12, 15, 11], [100, 98, 95, 99]],
+            dtype=np.uint16,
+        )
+        config = {"bytes_per_sample": 2, "width": 4}
+
+        encoded_bytes = wasm_encode(COMPONENT_WASM_PATH, arr.tobytes(), config)
+        decoded_bytes = wasm_decode(COMPONENT_WASM_PATH, encoded_bytes, config)
+
+        result = np.frombuffer(decoded_bytes, dtype=np.uint16).reshape(arr.shape)
+        np.testing.assert_array_equal(result, arr)

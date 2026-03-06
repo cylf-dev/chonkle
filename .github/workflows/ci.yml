@@ -29,6 +29,10 @@ jobs:
       - name: Run pre-commit hooks
         run: uv run pre-commit run --all-files
 
+      - name: Show files modified by pre-commit
+        if: failure()
+        run: git diff
+
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -50,6 +54,18 @@ jobs:
 
       - name: Install dependencies
         run: uv sync
+
+      - name: Cache core wasm fixture
+        uses: actions/cache@v4
+        with:
+          path: tests/fixtures/chunks/cog_wasm/tiff-predictor-2-c.wasm
+          key: core-wasm-tiff-predictor-2-c-v0.2.0
+
+      - name: Cache component wasm fixture
+        uses: actions/cache@v4
+        with:
+          path: tests/fixtures/chunks/cog_wasm/tiff-predictor-2-python.wasm
+          key: component-wasm-tiff-predictor-2-python-v0.1.0
 
       - name: Run tests
         run: uv run pytest -v

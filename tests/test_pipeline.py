@@ -39,6 +39,8 @@ class TestDecode:
 
 
 class TestDecodeWasm:
+    pytestmark = pytest.mark.usefixtures("ensure_core_wasm")
+
     def test_wasm_decode_matches_native(self, tmp_path: Path) -> None:
         """Wasm TiffPredictor2 produces identical output to native."""
         native = _decode_fixture(FIXTURES_DIR / "cog" / "0")

@@ -29,7 +29,7 @@ Each chunk has a sidecar JSON file that describes the codec pipeline used to enc
     {
       "name": "tiff_predictor_2",
       "type": "wasm",
-      "uri": "file:///path/to/tiff-predictor-2-c.wasm",
+      "uri": "file://path/to/tiff-predictor-2-c.wasm",
       "configuration": {
         "bytes_per_sample": 2,
         "width": 1024

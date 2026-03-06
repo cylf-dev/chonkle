@@ -1,0 +1,6 @@
+{
+  // Disable line length — prose docs are more readable without hard wrapping
+  "MD013": false,
+  // Allow duplicate headings in different sections (e.g. repeated Pros/Cons)
+  "MD024": { "siblings_only": true }
+}

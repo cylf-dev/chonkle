@@ -6,7 +6,8 @@ This document covers how chonkle uses WebAssembly for custom codecs. For general
 - [WASI](wasm/WASI.md) — system interface, `wasm32-wasi` target, command vs reactor
 - [Linear memory](wasm/MEMORY.md) — memory growth, `dlmalloc`, buffer strategies
 - [Distribution](DISTRIBUTION.md) — remote storage options for `.wasm` files
-- [Codec ABI](CODEC_ABI.md) — the interface contract between host and `.wasm` codec modules
+- [Codec contract](CODEC_CONTRACT.md) — the interface contract between host and `.wasm` codec modules
+- [WIT](wasm/WIT.md) — WIT interface definition language and the Component Model
 
 ## Why Wasm and Python?
 
@@ -26,7 +27,7 @@ Python is widely used in the geospatial community (our initial target audience),
 
 ## How this project uses Wasm
 
-This project uses the **Core Wasm** approach (see [Why Core Wasm?](#why-core-wasm-over-the-component-model) for the rationale). Wasm codecs are loaded and executed from Python using Wasmtime. Custom codec source code and build tooling live in a separate repositories; this project only contains the host-side runner.
+Wasm codecs are loaded and executed from Python using Wasmtime. Both Core modules and Components are supported; see [Core modules and Components](#core-modules-and-components). Custom codec source code and build tooling live in separate repositories; this project only contains the host-side runner.
 
 ### Codec pipelines
 
@@ -74,27 +75,39 @@ Each chunk has a sidecar JSON file that specifies its codec pipeline. Wasm codec
 
 Supported URI schemes: `file://`, `https://`, and `oci://`.
 
-### The codec ABI
+### The codec contract
 
-See [CODEC_ABI.md](CODEC_ABI.md) for the full specification — exported functions, calling convention, and error signaling.
+See [CODEC_CONTRACT.md](CODEC_CONTRACT.md) for the full specification — the Core module ABI and the Component WIT interface.
 
-## Why Core Wasm over the Component Model?
+## Core modules and Components
+
+Chonkle supports both Wasm formats. Detection is automatic: `wasm_runner.py` reads the first 8 bytes of each `.wasm` file — Core modules have version bytes `01 00 00 00`, Components have `0d 00 01 00`. The appropriate call path is selected without any configuration required.
 
 Wasm has two approaches to host-module communication. The **Core** approach passes only numbers (`i32`, `i64`, `f32`, `f64`) across the boundary — to exchange bytes or strings, the host manually writes data into linear memory and passes pointers. The **Component Model** uses WIT (Wasm Interface Type) definitions and a Canonical ABI to automatically marshal rich types like `list<u8>` and `string`.
 
-In the Component Model, you define your interface in a `.wit` file using high-level types — `list<u8>` for a byte array, `string` for text, `record` for structs, etc. The **Canonical ABI** is the specification that tells both sides (host and module) exactly how to serialize and deserialize those types across the Wasm boundary. The tooling generates glue code that handles all the pointer/length/memory management, so you'd just call `decode(data, config)` passing a byte list and a string directly, rather than doing `alloc` → `memory.write` → pass pointer and length → `memory.read` → `dealloc` yourself.
+### Core module path
 
-### The codec ABI is simple enough that the Component Model doesn't pay for itself
+Core modules must export the custom ABI described in [CODEC_CONTRACT.md](CODEC_CONTRACT.md#core-module-abi): `alloc`, `dealloc`, `memory`, and `encode`/`decode`. The host handles all memory management explicitly. Both freestanding and WASI reactor modules are supported.
 
-Our codec interface is essentially `decode(bytes, string) -> bytes`. The Component Model's strengths — rich type marshaling, formal interface contracts, cross-language interoperability — shine when interfaces have many types and complex signatures. For a function that takes bytes and returns bytes, the Canonical ABI adds machinery without proportional benefit.
+### Component Model path
 
-### Codec author friction matters more than host-side elegance
+Components must export an `encode` and/or `decode` function with signature:
 
-The Component Model makes the host code cleaner (about 5 lines vs 30), but pushes complexity onto codec authors through extra build steps and generated files for certain languages (e.g., C). Thus, we chose the Core approach to minimize friction when authoring custom codecs, while accepting some additional complexity in the host code, which is an internal implementation detail.
+```wit
+func(data: list<u8>, config: string) -> result<list<u8>, string>
+```
 
-### Stability and migration
+The function may be exported directly at the world level or within an interface. `wasm_runner.py` discovers it at runtime by introspecting the component's type, so the WIT package name does not need to be known in advance. Components built with `componentize-py` against WASIp2 are supported.
 
-The Wasm Component Model spec continues to evolve, and committing to it now means tracking upstream changes in `wit-bindgen`, `wasm-tools`, and the Canonical ABI. The Core approach gives us a stable, fully self-controlled ABI with no external specification dependencies. If the Component Model matures and becomes the dominant standard, migrating would require revising `wasm_runner.py` on the host side and updating codec build instructions for authors.
+Error handling: if the component function returns the `Err` variant of the result, chonkle raises `RuntimeError` with the error string.
+
+### Choosing between Core modules and Components
+
+The right choice depends on the codec author's language and toolchain.
+
+**Core modules** have a minimal author-side contract: implement four functions (`alloc`, `dealloc`, `encode`, `decode`). For C, this maps naturally to the language — memory management is explicit anyway, and there are no extra build steps or WIT files to maintain. The ABI is self-contained and stable; it does not depend on `wit-bindgen`, `wasm-tools`, or the Canonical ABI spec.
+
+**Components** are well-suited for high-level languages like Python. `componentize-py` generates a Component naturally from a Python implementation, and the WIT/Canonical ABI handles all type marshalling automatically. For C or Rust, adopting the Component Model adds build steps (a `.wit` file, generated glue code) that the Core path avoids.
 
 ## Memory and the copy cost
 
