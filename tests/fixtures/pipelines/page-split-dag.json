@@ -21,8 +21,7 @@
         "rep_length": "constant.rep_length",
         "def_length": "constant.def_length"
       },
-      "outputs": ["rep_levels", "def_levels", "data"],
-      "encode_only_inputs": []
+      "outputs": ["rep_levels", "def_levels", "data"]
     },
     {
       "name": "identity_rep",
@@ -31,8 +30,7 @@
       "inputs": {
         "bytes": "page_split.rep_levels"
       },
-      "outputs": ["bytes"],
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     },
     {
       "name": "identity_def",
@@ -41,8 +39,7 @@
       "inputs": {
         "bytes": "page_split.def_levels"
       },
-      "outputs": ["bytes"],
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     },
     {
       "name": "identity_data",
@@ -51,8 +48,7 @@
       "inputs": {
         "bytes": "page_split.data"
       },
-      "outputs": ["bytes"],
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     }
   ]
 }

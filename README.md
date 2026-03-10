@@ -192,8 +192,7 @@ outputs of previous steps.
       "inputs": {
         "bytes": "input.bytes"
       },
-      "outputs": {"bytes": {"type": "bytes"}},
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     },
     {
       "name": "split",
@@ -204,12 +203,7 @@ outputs of previous steps.
         "rep_length": "input.rep_length",
         "def_length": "input.def_length"
       },
-      "outputs": {
-        "rep_bytes": {"type": "bytes"},
-        "def_bytes": {"type": "bytes"},
-        "value_bytes": {"type": "bytes"}
-      },
-      "encode_only_inputs": []
+      "outputs": ["rep_bytes", "def_bytes", "value_bytes"]
     },
     {
       "name": "decode_values",
@@ -219,8 +213,7 @@ outputs of previous steps.
         "bytes": "split.value_bytes",
         "bit_width": "constant.index_bit_width"
       },
-      "outputs": {"bytes": {"type": "bytes"}},
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     },
     {
       "name": "decode_def",
@@ -230,8 +223,7 @@ outputs of previous steps.
         "bytes": "split.def_bytes",
         "bit_width": "constant.def_bit_width"
       },
-      "outputs": {"bytes": {"type": "bytes"}},
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     },
     {
       "name": "decode_rep",
@@ -241,8 +233,7 @@ outputs of previous steps.
         "bytes": "split.rep_bytes",
         "bit_width": "constant.rep_bit_width"
       },
-      "outputs": {"bytes": {"type": "bytes"}},
-      "encode_only_inputs": []
+      "outputs": ["bytes"]
     }
   ]
 }
