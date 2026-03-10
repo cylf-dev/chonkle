@@ -1,118 +1,85 @@
 """CLI entry point for chonkle."""
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
-import numpy as np
-
-from chonkle.pipeline import decode, encode, get_codecs
+from chonkle.executor import run
+from chonkle.pipeline import Pipeline
 
 
 def main() -> None:
     """Entry point for the chonkle CLI."""
     parser = argparse.ArgumentParser(
         prog="chonkle",
-        description="Utilities for encoding and decoding chunks.",
+        description="Execute a Wasm Component Model codec pipeline DAG.",
     )
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # ── decode ──
-    dc_parser = subparsers.add_parser(
-        "decode",
-        help="Decode a chunk and display or save the result.",
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Execute a pipeline JSON against named input data.",
     )
-    dc_parser.add_argument(
-        "chunk_path",
+    run_parser.add_argument(
+        "pipeline",
         type=Path,
-        help="Path to an encoded chunk file "
-        "(sidecar metadata expected at <path>.json).",
+        help="Path to a pipeline JSON file.",
     )
-    dc_parser.add_argument(
-        "--pipeline",
-        type=Path,
-        default=None,
-        help="Path to a pipeline JSON file. Defaults to <chunk_path>.json sidecar.",
+    run_parser.add_argument(
+        "--input",
+        metavar="NAME=FILE",
+        action="append",
+        default=[],
+        dest="inputs",
+        help="Named input port: --input bytes=chunk.bin (repeatable).",
     )
-    dc_parser.add_argument(
-        "-o",
+    run_parser.add_argument(
         "--output",
-        type=Path,
-        default=None,
-        help="Save the decoded array to a .npy file instead of printing.",
+        metavar="NAME=FILE",
+        action="append",
+        default=[],
+        dest="outputs",
+        help="Write named output port to file: --output bytes=result.bin (repeatable).",
     )
-
-    # ── encode ──
-    en_parser = subparsers.add_parser(
-        "encode",
-        help="Encode a .npy array through a codec pipeline.",
-    )
-    en_parser.add_argument(
-        "input",
-        type=Path,
-        help="Path to a .npy file containing the array to encode.",
-    )
-    en_parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        required=True,
-        help="Path for the encoded output. "
-        "Pipeline is read from <output>.json sidecar by default.",
-    )
-    en_parser.add_argument(
-        "--pipeline",
-        type=Path,
-        default=None,
-        help="Path to a pipeline JSON file. Defaults to <output>.json sidecar.",
+    run_parser.add_argument(
+        "--force-download",
+        action="store_true",
+        default=False,
+        help="Re-download cached codec .wasm files even if they exist locally.",
     )
 
     args = parser.parse_args()
-
-    if args.command == "decode":
-        _run_decode(args)
-    elif args.command == "encode":
-        _run_encode(args)
+    if args.command == "run":
+        _run_command(args)
 
 
-def _run_decode(args: argparse.Namespace) -> None:
-    """Decode a chunk and print or save the result."""
-    pipeline_path = args.pipeline or args.chunk_path.parent / (
-        args.chunk_path.name + ".json"
-    )
-    codec_specs = get_codecs(pipeline_path)
-    data = args.chunk_path.read_bytes()
-    arr = decode(data, codec_specs)
+def _run_command(args: argparse.Namespace) -> None:
+    """Execute a pipeline and write or report outputs."""
+    pipeline = Pipeline.parse(args.pipeline)
 
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        np.save(args.output, arr)
-        sys.stdout.write(f"Saved {arr.shape} {arr.dtype} array to {args.output}\n")
-    else:
-        sys.stdout.write(f"Shape: {arr.shape}, dtype: {arr.dtype}\n")
-        slices = tuple(slice(min(5, s)) for s in arr.shape)
-        sys.stdout.write(f"First 5x5:\n{arr[slices]}\n")
+    inputs: dict[str, bytes] = {}
+    for spec in args.inputs:
+        if "=" not in spec:
+            sys.stderr.write(f"--input must be NAME=FILE, got {spec!r}\n")
+            sys.exit(1)
+        name, path = spec.split("=", 1)
+        inputs[name] = Path(path).read_bytes()
 
+    result = run(pipeline, inputs, force_download=args.force_download)
 
-def _run_encode(args: argparse.Namespace) -> None:
-    """Encode a .npy array through a codec pipeline."""
-    arr = np.load(args.input)
+    requested_outputs: dict[str, str] = {}
+    for spec in args.outputs:
+        if "=" not in spec:
+            sys.stderr.write(f"--output must be NAME=FILE, got {spec!r}\n")
+            sys.exit(1)
+        name, path = spec.split("=", 1)
+        requested_outputs[name] = path
 
-    sidecar = args.output.parent / (args.output.name + ".json")
-    pipeline_path = args.pipeline if args.pipeline is not None else sidecar
-
-    codec_specs = get_codecs(pipeline_path)
-    encoded = encode(arr, codec_specs)
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_bytes(encoded)
-
-    # Copy pipeline to sidecar if it came from elsewhere.
-    if args.pipeline is not None and args.pipeline.resolve() != sidecar.resolve():
-        shutil.copy2(args.pipeline, sidecar)
-
-    sys.stdout.write(
-        f"Encoded {arr.shape} {arr.dtype} → {len(encoded)} bytes → {args.output}\n"
-    )
+    for port_name, data in result.items():
+        if port_name in requested_outputs:
+            out_path = Path(requested_outputs[port_name])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(data)
+            sys.stdout.write(f"Wrote {len(data)} bytes to {out_path}\n")
+        else:
+            sys.stdout.write(f"Output {port_name!r}: {len(data)} bytes\n")

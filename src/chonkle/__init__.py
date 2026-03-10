@@ -1,13 +1,12 @@
-"""A codec pipeline library for encoding and decoding chunked array data."""
+"""Wasm Component Model codec pipeline library."""
 
-from chonkle.codecs import BytesCodec, Endian, TiffPredictor2
-from chonkle.pipeline import decode, encode, get_codecs
+from chonkle.executor import run
+from chonkle.pipeline import Pipeline, StepSpec
+from chonkle.wasm_download import resolve_uri
 
 __all__ = [
-    "BytesCodec",
-    "Endian",
-    "TiffPredictor2",
-    "decode",
-    "encode",
-    "get_codecs",
+    "Pipeline",
+    "StepSpec",
+    "resolve_uri",
+    "run",
 ]

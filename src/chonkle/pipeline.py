@@ -1,132 +1,311 @@
-"""Encode and decode raw chunks using metadata-driven codec pipelines."""
+"""DAG pipeline: parse JSON, validate wiring, topological sort."""
+
+from __future__ import annotations
 
 import json
+from collections import defaultdict, deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-
-import numcodecs
-import numpy as np
-
-import chonkle.codecs  # noqa: F401 — register custom codecs
-from chonkle.wasm_runner import resolve_wasm_uri, wasm_decode, wasm_encode
 
 Direction = Literal["encode", "decode"]
 
 
-def get_codecs(source: Path | dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract codec specs from a pipeline definition.
+@dataclass
+class WiringRef:
+    """A parsed wiring reference from the pipeline JSON."""
 
-    'source' may be a Path to a JSON file or a dict, both expected to
-    contain a "codecs" key.
-    """
-    if isinstance(source, Path):
-        with source.open() as f:
-            metadata: dict[str, Any] = json.load(f)
-    else:
-        metadata = source
+    kind: Literal["input", "constant", "step"]
+    source: str  # "input", "constant", or step codec_id
+    port: str  # port name within the source
 
-    if "codecs" not in metadata:
-        msg = f"Missing required key 'codecs' in {metadata!r}"
-        raise KeyError(msg)
+    @classmethod
+    def parse(cls, ref_str: str) -> WiringRef:
+        """Parse a dot-notation wiring reference string into a WiringRef.
 
-    return metadata["codecs"]
+        Accepts the three wiring reference forms used in pipeline JSON:
+        ``"input.<port>"``, ``"constant.<port>"``, and
+        ``"<step_name>.<port>"``.
 
+        Args:
+            ref_str: A dot-separated wiring reference of the form
+                ``<source>.<port>``.  The source is either the literal
+                string ``"input"``, the literal string ``"constant"``,
+                or the name of a pipeline step.
 
-def decode(data: bytes, codecs: list[dict[str, Any]]) -> np.ndarray:
-    """Decode raw bytes through a codec pipeline, returning an ndarray.
+        Returns:
+            A WiringRef with ``kind`` set to ``"input"``,
+            ``"constant"``, or ``"step"`` depending on the source token.
 
-    Codecs are applied in reverse order, unwinding the encoding.
-    """
-    result: bytes | np.ndarray = data
+        Raises:
+            ValueError: If ``ref_str`` does not contain exactly one
+                dot separator.
+        """
+        parts = ref_str.split(".", 1)
+        if len(parts) != 2:
+            msg = f"Invalid wiring reference {ref_str!r}: expected <source>.<port>"
+            raise ValueError(msg)
 
-    for codec_spec in reversed(codecs):
-        result = _apply_step(codec_spec, result, "decode")
+        source, port = parts
+        if source == "input":
+            kind: Literal["input", "constant", "step"] = "input"
+        elif source == "constant":
+            kind = "constant"
+        else:
+            kind = "step"
 
-    if not isinstance(result, np.ndarray):
-        msg = "Codec pipeline did not produce a numpy array"
-        raise TypeError(msg)
-
-    return result
-
-
-def encode(data: np.ndarray, codecs: list[dict[str, Any]]) -> bytes:
-    """Encode an ndarray through a codec pipeline, returning raw bytes.
-
-    Codecs are applied in forward order.
-    """
-    result: bytes | np.ndarray = data
-
-    for codec_spec in codecs:
-        result = _apply_step(codec_spec, result, "encode")
-
-    if not isinstance(result, bytes):
-        msg = "Codec pipeline did not produce bytes"
-        raise TypeError(msg)
-
-    return result
+        return cls(kind=kind, source=source, port=port)
 
 
-# ── codec step dispatch ──
+@dataclass
+class StepSpec:
+    """Specification for a single pipeline step."""
+
+    name: str  # unique DAG node identifier; used in wiring references
+    codec_id: str  # logical codec identifier; may repeat across steps
+    src: str
+    inputs: dict[str, str]  # port_name -> wiring_ref string
+    outputs: list[str]  # declared output port names
+    encode_only_inputs: list[str]  # port names that are skipped during decode
 
 
-def _apply_step(
-    codec_spec: dict[str, Any],
-    data: bytes | np.ndarray,
-    direction: Direction,
-) -> bytes | np.ndarray:
-    """Apply one encode or decode step of the codec pipeline."""
-    codec_type = codec_spec["type"]
+@dataclass
+class Pipeline:
+    """A parsed and validated DAG pipeline."""
 
-    if codec_type == "numcodecs":
-        return _apply_numcodecs(codec_spec, data, direction)
-    if codec_type == "wasm":
-        return _apply_wasm(codec_spec, data, direction)
+    codec_id: str
+    direction: Direction
+    inputs: dict[str, Any]
+    constants: dict[str, Any]
+    outputs: dict[str, str]  # pipeline_output_name -> wiring_ref string
+    steps: list[StepSpec]
+    execution_order: list[str]  # step names in topological order
 
-    msg = f"Unknown codec type: {codec_type!r}"
-    raise ValueError(msg)
+    @classmethod
+    def parse(cls, source: Path | dict[str, Any]) -> Pipeline:
+        """Parse a pipeline JSON document into a validated Pipeline.
 
+        Reads and deserializes the JSON if ``source`` is a Path, then
+        constructs a Pipeline, runs wiring validation, and computes a
+        topological execution order for the steps.
 
-def _apply_numcodecs(
-    codec_spec: dict[str, Any],
-    data: bytes | np.ndarray,
-    direction: Direction,
-) -> bytes | np.ndarray:
-    """Apply one step using a numcodecs codec."""
-    name = codec_spec["name"]
-    config = codec_spec.get("configuration", {})
-    codec_id = name.removeprefix("numcodecs.")
+        Args:
+            source: Either a Path to a JSON file on disk or a
+                pre-parsed dict representing the pipeline document.
 
-    codec = numcodecs.get_codec({"id": codec_id, **config})
-    result = getattr(codec, direction)(data)
-    if result is None:
-        msg = f"Codec '{codec_id}' returned None"
-        raise ValueError(msg)
-    return result
+        Returns:
+            A fully validated Pipeline with ``execution_order``
+            populated in topological order.
 
+        Raises:
+            ValueError: If ``direction`` is missing or not
+                ``"encode"`` or ``"decode"``, if ``codec_id`` is not
+                a string, if any wiring reference is unresolvable or
+                references a non-existent step or port, or if the step
+                dependency graph contains a cycle.
+        """
+        if isinstance(source, Path):
+            with source.open() as f:
+                data: dict[str, Any] = json.load(f)
+        else:
+            data = source
 
-def _apply_wasm(
-    codec_spec: dict[str, Any],
-    data: bytes | np.ndarray,
-    direction: Direction,
-) -> bytes | np.ndarray:
-    """Apply one step using a Wasm codec module."""
-    wasm_path = resolve_wasm_uri(codec_spec["uri"])
-    config = codec_spec.get("configuration", {})
+        direction = data.get("direction")
+        if direction not in ("encode", "decode"):
+            msg = f"'direction' must be 'encode' or 'decode', got {direction!r}"
+            raise ValueError(msg)
 
-    # Wasm operates on raw bytes.  If the pipeline handed us an ndarray,
-    # convert to bytes and reconstruct the array from the output.
-    dtype: np.dtype | None = None
-    shape: tuple[int, ...] | None = None
+        codec_id = data.get("codec_id")
+        if not isinstance(codec_id, str):
+            msg = f"'codec_id' must be a string, got {codec_id!r}"
+            raise ValueError(msg)
+        inputs = dict(data.get("inputs", {}))
+        constants = dict(data.get("constants", {}))
+        outputs = dict(data.get("outputs", {}))
 
-    if isinstance(data, np.ndarray):
-        dtype = data.dtype
-        shape = data.shape
-        data = data.tobytes(order="C")
+        steps: list[StepSpec] = []
+        for step_data in data.get("steps", []):
+            step = StepSpec(
+                name=step_data["name"],
+                codec_id=step_data["codec_id"],
+                src=step_data["src"],
+                inputs=dict(step_data.get("inputs", {})),
+                outputs=list(step_data.get("outputs", [])),
+                encode_only_inputs=list(step_data.get("encode_only_inputs", [])),
+            )
+            steps.append(step)
 
-    wasm_fn = wasm_decode if direction == "decode" else wasm_encode
-    result_bytes = wasm_fn(wasm_path, data, config)
+        pipeline = cls(
+            codec_id=codec_id,
+            direction=direction,
+            inputs=inputs,
+            constants=constants,
+            outputs=outputs,
+            steps=steps,
+            execution_order=[],
+        )
 
-    if dtype is not None and shape is not None:
-        return np.frombuffer(result_bytes, dtype=dtype).reshape(shape, order="C")
+        pipeline._validate()
+        pipeline.execution_order = cls._topological_sort(steps)
+        return pipeline
 
-    return result_bytes
+    def _validate(self) -> None:
+        """Validate step declarations and all wiring references.
+
+        Performs the following checks in order:
+
+        1. Step names are unique within the pipeline.
+        2. Every port listed in a step's ``encode_only_inputs`` is also
+           declared in that step's ``inputs``.
+        3. Every step input wiring reference resolves to a declared
+           pipeline input, constant, or an output port of another step.
+        4. Every pipeline output wiring reference resolves in the
+           same way.
+
+        Raises:
+            ValueError: If any of the above checks fail.
+        """
+        step_names = {s.name for s in self.steps}
+        step_outputs = {s.name: set(s.outputs) for s in self.steps}
+
+        seen: set[str] = set()
+        for step in self.steps:
+            if step.name in seen:
+                msg = f"Duplicate step name: {step.name!r}"
+                raise ValueError(msg)
+            seen.add(step.name)
+
+        for step in self.steps:
+            for eoi in step.encode_only_inputs:
+                if eoi not in step.inputs:
+                    msg = (
+                        f"Step {step.name!r}: encode_only_input {eoi!r} "
+                        "is not declared in inputs"
+                    )
+                    raise ValueError(msg)
+            for port_name, ref_str in step.inputs.items():
+                self._check_ref(
+                    ref_str,
+                    f"step {step.name!r} input {port_name!r}",
+                    step_names,
+                    step_outputs,
+                )
+
+        for out_name, ref_str in self.outputs.items():
+            self._check_ref(
+                ref_str,
+                f"pipeline output {out_name!r}",
+                step_names,
+                step_outputs,
+            )
+
+    def _check_ref(
+        self,
+        ref_str: str,
+        context: str,
+        step_names: set[str],
+        step_outputs: dict[str, set[str]],
+    ) -> None:
+        """Validate a single wiring reference against pipeline declarations.
+
+        For ``input`` references, confirms the port is declared in
+        ``self.inputs``.  For ``constant`` references, confirms the
+        name is declared in ``self.constants``.  For step references,
+        confirms the step exists and that the referenced port is in
+        the step's declared outputs.
+
+        Args:
+            ref_str: The raw wiring reference string (e.g.
+                ``"input.bytes"`` or ``"zstd_step.bytes"``).
+            context: A human-readable label for the reference site,
+                used in error messages (e.g.
+                ``"step 'foo' input 'bytes'"``).
+            step_names: The set of all step names defined in the
+                pipeline.
+            step_outputs: Mapping from step name to the set of output
+                port names that step declares.
+
+        Raises:
+            ValueError: If the reference is unresolvable — the input
+                or constant port is not declared, the target step does
+                not exist, or the target step does not declare the
+                referenced output port.
+        """
+        ref = WiringRef.parse(ref_str)
+        if ref.kind == "input":
+            if ref.port not in self.inputs:
+                msg = (
+                    f"{context}: input {ref.port!r} is not declared in pipeline inputs"
+                    f" (declared: {self.inputs})"
+                )
+                raise ValueError(msg)
+        elif ref.kind == "constant":
+            if ref.port not in self.constants:
+                msg = (
+                    f"{context}: constant {ref.port!r} is not declared"
+                    f" in pipeline constants (declared: {sorted(self.constants)})"
+                )
+                raise ValueError(msg)
+        else:
+            if ref.source not in step_names:
+                msg = f"{context}: step {ref.source!r} does not exist"
+                raise ValueError(msg)
+            if ref.port not in step_outputs[ref.source]:
+                msg = (
+                    f"{context}: step {ref.source!r} does not declare output port"
+                    f" {ref.port!r} (declared: {sorted(step_outputs[ref.source])})"
+                )
+                raise ValueError(msg)
+
+    @staticmethod
+    def _topological_sort(steps: list[StepSpec]) -> list[str]:
+        """Return step names in a valid execution order using Kahn's algorithm.
+
+        Builds an in-degree map and adjacency list from the step wiring
+        references, then processes nodes with zero in-degree iteratively
+        until all steps are ordered or a cycle is detected.
+
+        Args:
+            steps: The list of StepSpec objects to sort.  Only
+                ``"step"``-kind wiring references (i.e. inter-step
+                dependencies) are considered; ``"input"`` and
+                ``"constant"`` references do not contribute edges.
+
+        Returns:
+            A list of step names ordered so that every step appears
+            after all steps it depends on.
+
+        Raises:
+            ValueError: If the dependency graph contains a cycle,
+                listing the step names involved.
+        """
+        in_degree: dict[str, int] = {s.name: 0 for s in steps}
+        dependents: dict[str, list[str]] = defaultdict(list)
+
+        for step in steps:
+            deps: set[str] = set()
+            for ref_str in step.inputs.values():
+                ref = WiringRef.parse(ref_str)
+                if ref.kind == "step":
+                    deps.add(ref.source)
+            for dep in deps:
+                dependents[dep].append(step.name)
+                in_degree[step.name] += 1
+
+        queue: deque[str] = deque(name for name, deg in in_degree.items() if deg == 0)
+        order: list[str] = []
+
+        while queue:
+            name = queue.popleft()
+            order.append(name)
+            for dependent in dependents[name]:
+                in_degree[dependent] -= 1
+                if in_degree[dependent] == 0:
+                    queue.append(dependent)
+
+        if len(order) != len(steps):
+            remaining = [n for n in in_degree if n not in set(order)]
+            msg = f"Pipeline contains a cycle involving steps: {remaining}"
+            raise ValueError(msg)
+
+        return order

@@ -271,8 +271,6 @@ name = "chonkle"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "numcodecs" },
-    { name = "numpy" },
     { name = "oras" },
     { name = "wasmtime" },
 ]
@@ -293,8 +291,6 @@ notebook = [
 
 [package.metadata]
 requires-dist = [
-    { name = "numcodecs" },
-    { name = "numpy" },
     { name = "oras" },
     { name = "wasmtime" },
 ]
