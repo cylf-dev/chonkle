@@ -711,6 +711,222 @@ class TestSignatureValidation:
 
         assert "step_b" in str(exc_info.value)
 
+    def test_signature_input_port_missing_type_raises(self, tmp_path: Path) -> None:
+        """A signature input port without a 'type' field raises ValueError."""
+        wasm_file = tmp_path / "codec.wasm"
+        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        signature = {
+            "inputs": {"bytes": {"required": True}},  # no "type"
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        pipeline = self._make_pipeline(wasm_file)
+
+        with (
+            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
+            pytest.raises(ValueError, match="missing required 'type' field"),
+        ):
+            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+
+    def test_signature_output_port_missing_type_raises(self, tmp_path: Path) -> None:
+        """A signature output port without a 'type' field raises ValueError."""
+        wasm_file = tmp_path / "codec.wasm"
+        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        signature = {
+            "inputs": {"bytes": {"type": "bytes", "required": True}},
+            "outputs": {"bytes": {}},  # no "type"
+        }
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        pipeline = self._make_pipeline(wasm_file)
+
+        with (
+            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
+            pytest.raises(ValueError, match="missing required 'type' field"),
+        ):
+            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+
+    def test_type_mismatch_pipeline_input_raises(self, tmp_path: Path) -> None:
+        """Pipeline input type mismatch against codec signature raises ValueError."""
+        wasm_file = tmp_path / "codec.wasm"
+        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        signature = {
+            "inputs": {"data": {"type": "bytes", "required": True}},
+            "outputs": {"data": {"type": "bytes"}},
+        }
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        # Pipeline declares input "data" as type "int"; codec expects "bytes".
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"data": {"type": "int"}},
+                "constants": {},
+                "outputs": {"data": "s.data"},
+                "steps": [
+                    {
+                        "name": "s",
+                        "codec_id": "some-codec",
+                        "src": f"file:///{wasm_file}",
+                        "inputs": {"data": "input.data"},
+                        "outputs": ["data"],
+                    }
+                ],
+            }
+        )
+
+        with (
+            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
+            pytest.raises(ValueError, match="provides type"),
+        ):
+            run(pipeline, {"data": b"payload"}, pipeline.direction)
+
+    def test_type_mismatch_constant_raises(self, tmp_path: Path) -> None:
+        """Constant type mismatch against codec signature raises ValueError."""
+        wasm_file = tmp_path / "codec.wasm"
+        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        signature = {
+            "inputs": {
+                "bytes": {"type": "bytes", "required": True},
+                "level": {"type": "bytes", "required": False},
+            },
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        # Constant "level" has type "int"; codec expects "bytes".
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {"level": {"type": "int", "value": 3}},
+                "outputs": {"bytes": "s.bytes"},
+                "steps": [
+                    {
+                        "name": "s",
+                        "codec_id": "some-codec",
+                        "src": f"file:///{wasm_file}",
+                        "inputs": {"bytes": "input.bytes", "level": "constant.level"},
+                        "outputs": ["bytes"],
+                    }
+                ],
+            }
+        )
+
+        with (
+            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
+            pytest.raises(ValueError, match="provides type"),
+        ):
+            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+
+    def test_type_mismatch_step_output_raises(self, tmp_path: Path) -> None:
+        """Step output type mismatch against downstream codec input raises."""
+        wasm_a = tmp_path / "codec_a.wasm"
+        wasm_b = tmp_path / "codec_b.wasm"
+        wasm_a.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        wasm_b.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        sig_a = {
+            "inputs": {"bytes": {"type": "bytes", "required": True}},
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        sig_b = {
+            # Expects "int" but step_a outputs "bytes".
+            "inputs": {"bytes": {"type": "int", "required": True}},
+            "outputs": {"bytes": {"type": "int"}},
+        }
+        (tmp_path / "codec_a.signature.json").write_text(json.dumps(sig_a))
+        (tmp_path / "codec_b.signature.json").write_text(json.dumps(sig_b))
+
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "step_b.bytes"},
+                "steps": [
+                    {
+                        "name": "step_a",
+                        "codec_id": "codec-a",
+                        "src": f"file:///{wasm_a}",
+                        "inputs": {"bytes": "input.bytes"},
+                        "outputs": ["bytes"],
+                    },
+                    {
+                        "name": "step_b",
+                        "codec_id": "codec-b",
+                        "src": f"file:///{wasm_b}",
+                        "inputs": {"bytes": "step_a.bytes"},
+                        "outputs": ["bytes"],
+                    },
+                ],
+            }
+        )
+
+        with (
+            patch(
+                "chonkle.executor.resolve_uri",
+                side_effect=lambda uri, **kw: Path(uri.removeprefix("file:///")),
+            ),
+            pytest.raises(ValueError, match="provides type"),
+        ):
+            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+
+    def test_type_match_passes(self, tmp_path: Path) -> None:
+        """Matching types across pipeline input and codec signature do not raise."""
+        wasm_file = tmp_path / "codec.wasm"
+        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        signature = {
+            "inputs": {"bytes": {"type": "bytes", "required": True}},
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        pipeline = self._make_pipeline(wasm_file)
+
+        with (
+            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
+            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
+        ):
+            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
+
+        assert result == {"bytes": b"out"}
+
+    def test_missing_type_in_source_skips_check(self, tmp_path: Path) -> None:
+        """Pipeline input with no 'type' key skips type check without raising."""
+        wasm_file = tmp_path / "codec.wasm"
+        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
+        signature = {
+            "inputs": {"bytes": {"type": "bytes", "required": True}},
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        # Pipeline input descriptor has no "type" key.
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {}},
+                "constants": {},
+                "outputs": {"bytes": "s.bytes"},
+                "steps": [
+                    {
+                        "name": "s",
+                        "codec_id": "some-codec",
+                        "src": f"file:///{wasm_file}",
+                        "inputs": {"bytes": "input.bytes"},
+                        "outputs": ["bytes"],
+                    }
+                ],
+            }
+        )
+
+        with (
+            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
+            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
+        ):
+            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
+
+        assert result == {"bytes": b"out"}
+
 
 class TestInvertedExecution:
     """Verify inverted DAG execution (direction != pipeline.direction)."""

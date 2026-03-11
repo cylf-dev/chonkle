@@ -10,7 +10,7 @@ from typing import Any
 import wasmtime
 import wasmtime.component
 
-from chonkle.pipeline import Direction, Pipeline, StepSpec
+from chonkle.pipeline import Direction, Pipeline, StepSpec, WiringRef
 from chonkle.wasm_download import resolve_uri
 
 log = logging.getLogger(__name__)
@@ -184,6 +184,15 @@ def _build_forward_port_map(
     """Build the port-map for a step in forward execution.
 
     Iterates step.inputs, omitting encode_only_inputs when direction is decode.
+
+    Args:
+        step: Step whose inputs define the port names and wiring refs.
+        value_store: Accumulated resolved byte values keyed by wiring ref string.
+        direction: Runtime execution direction; encode_only_inputs are excluded
+            when this is ``"decode"``.
+
+    Returns:
+        List of (port_name, bytes) tuples to pass to the codec component.
     """
     port_map: PortMap = []
     for port_name, ref_str in step.inputs.items():
@@ -204,6 +213,18 @@ def _build_inverted_port_map(
     The step's forward-direction outputs become its inverted-direction inputs.
     encode_only_inputs are appended when calling encode (they are codec
     parameters, e.g. compression level).
+
+    Args:
+        step_name: Name of the step, used to look up its output values in
+            value_store using the ``"<step_name>.<port>"`` key convention.
+        step: Step whose outputs define which values to look up and whose
+            encode_only_inputs are conditionally appended.
+        value_store: Accumulated resolved byte values keyed by wiring ref string.
+        direction: Runtime execution direction; encode_only_inputs are appended
+            only when this is ``"encode"``.
+
+    Returns:
+        List of (port_name, bytes) tuples to pass to the codec component.
     """
     port_map: PortMap = []
     for port_name in step.outputs:
@@ -227,6 +248,12 @@ def _store_inverted_outputs(
     decode-direction data inputs.  Each returned port is mapped through
     step.inputs to store the value at the correct wiring ref key.
     encode_only_inputs are parameters, not data outputs, so they are excluded.
+
+    Args:
+        step: Step providing the input wiring refs and encode_only_inputs set.
+        output_map: Port-map returned by the codec component call.
+        value_store: Accumulated resolved byte values; updated in place with
+            the values routed back through step.inputs wiring refs.
     """
     for port_name, value in output_map:
         if port_name in step.inputs and port_name not in step.encode_only_inputs:
@@ -277,29 +304,101 @@ def _validate_signatures(
         ValueError: One or more steps have signature validation errors.
     """
     errors: list[str] = []
+    step_output_types: dict[str, dict[str, str]] = {}
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
         wasm_path = wasm_paths[step_name]
         signature_path = wasm_path.parent / (wasm_path.stem + ".signature.json")
         try:
-            _validate_signature(step, signature_path, direction)
+            output_types = _validate_signature(
+                step, signature_path, direction, pipeline, step_output_types
+            )
+            step_output_types[step_name] = output_types or {}
         except (ValueError, FileNotFoundError) as exc:
             errors.append(str(exc))
     if errors:
         raise ValueError("Pipeline signature validation failed:\n" + "\n".join(errors))
 
 
-def _validate_signature(step: StepSpec, signature_path: Path, direction: str) -> None:
+def _check_input_types(
+    step: StepSpec,
+    signature_inputs: dict[str, Any],
+    direction: str,
+    pipeline: Pipeline,
+    step_output_types: dict[str, dict[str, str]],
+) -> list[str]:
+    """Return type-mismatch error strings for each active wired input.
+
+    For each active step input, resolves the type declared by the wiring
+    source (pipeline input, constant, or upstream step output) and compares
+    it against the codec's declared type.  Returns an empty list when all
+    types match or when type information is absent on either side.
+
+    Args:
+        step: Step whose active inputs are being type-checked.
+        signature_inputs: Codec signature input descriptors keyed by port name,
+            each containing at least a ``"type"`` field.
+        direction: Runtime execution direction; encode_only_inputs are skipped
+            when this is ``"decode"``.
+        pipeline: The pipeline, used to resolve type info for ``input.*`` and
+            ``constant.*`` wiring refs.
+        step_output_types: Accumulated output types from previously validated
+            upstream steps, keyed by step name then port name; used to resolve
+            types for ``<step>.<port>`` wiring refs.
+
+    Returns:
+        List of human-readable error strings describing type mismatches.
+        Empty when all active inputs pass type checks.
+    """
+    errors: list[str] = []
+    for port_name, ref_str in step.inputs.items():
+        if direction == "decode" and port_name in step.encode_only_inputs:
+            continue
+        if port_name not in signature_inputs:
+            continue
+        expected_type = signature_inputs[port_name].get("type")
+        if expected_type is None:
+            continue
+        ref = WiringRef.parse(ref_str)
+        if ref.kind == "input":
+            actual_type = (pipeline.inputs.get(ref.port) or {}).get("type")
+        elif ref.kind == "constant":
+            actual_type = (pipeline.constants.get(ref.port) or {}).get("type")
+        else:
+            actual_type = step_output_types.get(ref.source, {}).get(ref.port)
+        if actual_type is not None and actual_type != expected_type:
+            errors.append(
+                f"input {port_name!r}: wiring {ref_str!r} provides type"
+                f" {actual_type!r} but codec expects {expected_type!r}"
+            )
+    return errors
+
+
+def _validate_signature(
+    step: StepSpec,
+    signature_path: Path,
+    direction: str,
+    pipeline: Pipeline,
+    step_output_types: dict[str, dict[str, str]],
+) -> dict[str, str]:
     """Verify a step's port declarations against its codec signature sidecar.
 
     Each check is a subset check — the step need not use every port the codec
     declares. Input validation is direction-aware: encode_only ports are
-    excluded from the valid input set when direction is "decode".
+    excluded from the valid input set when direction is "decode". After name
+    checks, each active input's wiring source type is compared against the
+    codec's declared type for that port; a mismatch is an error.
 
     Args:
         step: Step whose declared inputs and outputs are being checked.
         signature_path: Path to the .signature.json sidecar file.
         direction: Runtime execution direction ("encode" or "decode").
+        pipeline: The pipeline, used to resolve input and constant types.
+        step_output_types: Accumulated output types from previously validated
+            upstream steps, keyed by step name then port name.
+
+    Returns:
+        Mapping of output port name to type string, from the signature.
 
     Raises:
         FileNotFoundError: The signature sidecar does not exist.
@@ -316,6 +415,12 @@ def _validate_signature(step: StepSpec, signature_path: Path, direction: str) ->
 
     if "inputs" in signature:
         signature_inputs: dict[str, Any] = signature["inputs"]
+        errors.extend(
+            f"input port {p!r} is missing required 'type' field"
+            for p, d in signature_inputs.items()
+            if "type" not in d
+        )
+
         if direction == "decode":
             valid_inputs = {
                 name
@@ -334,7 +439,20 @@ def _validate_signature(step: StepSpec, signature_path: Path, direction: str) ->
                 f"{sorted(valid_inputs)}"
             )
 
+        # Type compatibility: check each active wired input.
+        errors.extend(
+            _check_input_types(
+                step, signature_inputs, direction, pipeline, step_output_types
+            )
+        )
+
     if "outputs" in signature:
+        errors.extend(
+            f"output port {p!r} is missing required 'type' field"
+            for p, d in signature["outputs"].items()
+            if "type" not in d
+        )
+
         signature_outputs = set(signature["outputs"].keys())
         declared_outputs = set(step.outputs)
         unknown_outputs = declared_outputs - signature_outputs
@@ -348,6 +466,11 @@ def _validate_signature(step: StepSpec, signature_path: Path, direction: str) ->
         joined = "; ".join(errors)
         msg = f"Step {step.name!r}: {joined} (from {signature_path})"
         raise ValueError(msg)
+
+    return {
+        port: desc.get("type", "")
+        for port, desc in signature.get("outputs", {}).items()
+    }
 
 
 def _call_component(
