@@ -5,16 +5,15 @@ an *implementation* — it describes the DAG, the wiring, and the baked-in
 constants. It is not a codec signature, and its schema is not the same as a
 signature's.
 
-A pipeline is conceptually a codec: a codec signature for the pipeline could be
+A pipeline is conceptually a codec: a codec signature for the pipeline can be
 derived from the pipeline JSON. The input names and types come directly from the
 `inputs` field, and the output types can be inferred by tracing each output
-wiring reference back through the step signatures. If a pipeline were also compiled to a `.wasm` component implementing the
-`chonkle:codec/transform` WIT interface, it could appear as a step inside
-another pipeline — enabling hierarchical composition. This is not a
-hypothetical: the Wasm Component Model supports composing multiple components
-into a single new component via tools like `wasm-tools compose`. The pipeline
-JSON would drive that composition, and the result would be a self-contained
-`.wasm` whose WIT interface matches the pipeline's inputs and outputs.
+wiring reference back through the step signatures.
+
+A pipeline can therefore appear as a step inside another pipeline. When a step
+`src` resolves to a pipeline JSON rather than a `.wasm`, the executor recurses
+into the nested pipeline rather than calling a Wasm component. See
+`docs/PROTOSPEC_NOTES.md` for analysis of this decision.
 
 ## Top-level fields
 
@@ -119,9 +118,12 @@ The logical codec identifier. Matched against the codec signature's `codec_id`
 during validation.
 
 ### `src` (string, required)
-URI of the codec's `.wasm` file. Supported schemes: `file://`, `https://`,
-`oci://`. A `.signature.json` sidecar is expected at the same location (or as
-a layer in the same OCI artifact).
+URI of the codec artifact. Supported schemes: `file://`, `https://`, `oci://`.
+The artifact is either a `.wasm` component (leaf codec) or a pipeline JSON
+(pipeline-valued codec). For `.wasm` artifacts, a `.signature.json` sidecar is
+expected at the same location (or as a layer in the same OCI artifact). For
+pipeline JSON artifacts, the signature is derived from the pipeline's own
+`inputs` and `outputs` fields; no sidecar is required.
 
 ### `inputs` (object, required)
 Maps each codec input port name to a wiring reference. The key is the port name
@@ -239,8 +241,7 @@ on pipeline inputs in any protospec example
 `encode_only` is permitted on pipeline inputs
 
 A pipeline's derived codec signature needs `encode_only` annotations so that
-outer pipelines — and eventually a compiled `.wasm` component — know which
-inputs to omit during decode. The protospec does not show this on pipeline
+outer pipelines know which inputs to omit during decode. The protospec does not show this on pipeline
 inputs, but it is a logical extension of the same property on codec signature
 inputs.
 
