@@ -47,7 +47,7 @@ WIT (WebAssembly Interface Types): every codec component must export `encode`
 and `decode` functions that accept a named port map and a configuration blob.
 Wasmtime verifies the contract at instantiation time, rejecting a component
 with wrong signatures immediately. The specific ports a codec expects inside
-the port map are declared in a JSON manifest sidecar and validated by the
+the port map are declared in a JSON signature sidecar and validated by the
 orchestrator before any component is called.
 
 The Component Model also makes this practical at ecosystem scale. Any language
@@ -144,7 +144,7 @@ execution time is expected to dominate over data movement time.
 
 The Python host has two responsibilities:
 
-**Codec cache:** Fetches `.wasm` component files and their `.manifest.json`
+**Codec cache:** Fetches `.wasm` component files and their `.signature.json`
 sidecars referenced in the pipeline JSON (via `file://`, `https://`, or
 `oci://` URIs) and caches them locally to avoid redundant network requests.
 Wasmtime's built-in compilation cache handles compiled `.cwasm` artifacts
@@ -152,7 +152,7 @@ separately and transparently.
 
 **Orchestrator:** Parses the pipeline DAG JSON, resolves wiring between step
 outputs and inputs by name, determines execution order via topological sort,
-validates each step's port declarations against its manifest before execution,
+validates each step's port declarations against its signature before execution,
 and drives the Wasmtime execution loop — calling each component's `encode` or
 `decode` function in order and routing the named port outputs to the
 appropriate next step inputs.
@@ -246,10 +246,10 @@ outputs of previous steps.
 
 Each step declares both its `inputs` (wiring references) and its `outputs`
 (port names). Technically, the orchestrator could derive output port names
-entirely from each codec's manifest, making `outputs` in the pipeline JSON
+entirely from each codec's signature, making `outputs` in the pipeline JSON
 redundant. It is included here deliberately: a pipeline should be readable
-and verifiable by a human without cross-referencing external manifests.
-The orchestrator validates the declared `outputs` against the codec manifest
+and verifiable by a human without cross-referencing external signatures.
+The orchestrator validates the declared `outputs` against the codec signature
 at parse time — a mismatch is an error.
 
 ---
@@ -288,14 +288,31 @@ The wiring syntax (`input.<name>`, `<step>.<output>`, `constant.<name>`),
 the typed port model, and the distinction between `encode_only` and
 bidirectional inputs all follow the inventory's definitions.
 
-The inventory is still in progress. Known divergences:
+The full divergence log lives in [docs/PIPELINE_SCHEMA.md](docs/PIPELINE_SCHEMA.md).
+A summary:
 
-- **`src` is required.** The inventory envisions `codec_id` as sufficient for
-  lookup once a codec registry exists; `src` will become optional then.
-- **`configuration` is absent by design.** All codec parameters flow through
-  the port-map via constants. The `cfg` argument passed to each codec component
-  is always `b"{}"`. Type descriptors on inputs, outputs, and constants are
-  stored but not yet validated (no type-checking logic — PoC scope).
+- **`steps` is an array, not an object.** JSON objects have no guaranteed key
+  order across parsers. An array makes execution order explicit. The step name
+  moves into the object as a `name` field.
+- **`"codec"` renamed to `"codec_id"` in steps.** `codec_id` is the consistent
+  term throughout the schema; `codec` would be the only place the shorter form
+  appeared.
+- **`src` added to steps (required for now).** The protospec assumes a registry
+  that resolves codecs by `codec_id`; no registry exists yet. `src` is a direct
+  URI to the `.wasm` file and will become optional once a registry is in place.
+- **`name` added to steps.** A direct consequence of switching `steps` to an
+  array — the step name must live somewhere in the object.
+- **Step `outputs` is an array of port names, not an alias object.** The
+  protospec maps codec port names to local wiring aliases
+  (`{"bytes": "raw_uints"}`). Our wiring references use codec port names
+  directly (`step_name.port_name`), making the alias layer unnecessary.
+- **`encode_only` permitted on pipeline inputs.** The protospec shows
+  `encode_only` only on codec signature inputs. A pipeline's derived codec
+  signature needs these annotations so outer pipelines know which inputs to
+  omit during decode.
+- **`encode_only_inputs` added to steps.** The protospec records `encode_only`
+  in the codec signature. Surfacing it on the step keeps the pipeline
+  self-contained for routing at parse time, before signatures are loaded.
 
 ---
 

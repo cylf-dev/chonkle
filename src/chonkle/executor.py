@@ -35,7 +35,7 @@ def run(
         Pipeline output names mapped to byte values.
 
     Raises:
-        ValueError: A required input is missing or manifest validation fails.
+        ValueError: A required input is missing or signature validation fails.
         RuntimeError: A codec component call returns an error.
     """
     direction = pipeline.direction
@@ -58,8 +58,8 @@ def run(
     # Phase 1: resolve all codec URIs to local paths.
     wasm_paths = _resolve_uris(pipeline, step_by_name, force_download=force_download)
 
-    # Phase 2: validate all manifests before any component is called.
-    _validate_manifests(pipeline, step_by_name, wasm_paths)
+    # Phase 2: validate all signatures before any component is called.
+    _validate_signatures(pipeline, step_by_name, wasm_paths)
 
     # Phase 3: execute steps in topological order.
     return _execute_steps(pipeline, step_by_name, wasm_paths, inputs, active_inputs)
@@ -154,12 +154,12 @@ def _resolve_uris(
     }
 
 
-def _validate_manifests(
+def _validate_signatures(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
     wasm_paths: dict[str, Path],
 ) -> None:
-    """Validate all step manifests before any component is called.
+    """Validate all step signatures before any component is called.
 
     Collects errors from every step and raises a single ValueError listing
     all problems, so the caller sees every issue at once rather than failing
@@ -171,23 +171,23 @@ def _validate_manifests(
         wasm_paths: Step name to resolved local .wasm path.
 
     Raises:
-        ValueError: One or more steps have manifest validation errors.
+        ValueError: One or more steps have signature validation errors.
     """
     errors: list[str] = []
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
         wasm_path = wasm_paths[step_name]
-        manifest_path = wasm_path.parent / (wasm_path.stem + ".manifest.json")
+        signature_path = wasm_path.parent / (wasm_path.stem + ".signature.json")
         try:
-            _validate_manifest(step, manifest_path, pipeline.direction)
+            _validate_signature(step, signature_path, pipeline.direction)
         except (ValueError, FileNotFoundError) as exc:
             errors.append(str(exc))
     if errors:
-        raise ValueError("Pipeline manifest validation failed:\n" + "\n".join(errors))
+        raise ValueError("Pipeline signature validation failed:\n" + "\n".join(errors))
 
 
-def _validate_manifest(step: StepSpec, manifest_path: Path, direction: str) -> None:
-    """Verify a step's port declarations against its codec manifest sidecar.
+def _validate_signature(step: StepSpec, signature_path: Path, direction: str) -> None:
+    """Verify a step's port declarations against its codec signature sidecar.
 
     Each check is a subset check — the step need not use every port the codec
     declares. Input validation is direction-aware: encode_only ports are
@@ -195,55 +195,55 @@ def _validate_manifest(step: StepSpec, manifest_path: Path, direction: str) -> N
 
     Args:
         step: Step whose declared inputs and outputs are being checked.
-        manifest_path: Path to the .manifest.json sidecar file.
+        signature_path: Path to the .signature.json sidecar file.
         direction: Pipeline direction ("encode" or "decode").
 
     Raises:
-        FileNotFoundError: The manifest sidecar does not exist.
-        ValueError: Declared ports are not valid per the manifest.
+        FileNotFoundError: The signature sidecar does not exist.
+        ValueError: Declared ports are not valid per the signature.
     """
-    if not manifest_path.exists():
-        msg = f"Step {step.name!r}: manifest not found at {manifest_path}"
+    if not signature_path.exists():
+        msg = f"Step {step.name!r}: signature not found at {signature_path}"
         raise FileNotFoundError(msg)
 
-    with manifest_path.open() as f:
-        manifest = json.load(f)
+    with signature_path.open() as f:
+        signature = json.load(f)
 
     errors: list[str] = []
 
-    if "inputs" in manifest:
-        manifest_inputs: dict[str, Any] = manifest["inputs"]
+    if "inputs" in signature:
+        signature_inputs: dict[str, Any] = signature["inputs"]
         if direction == "decode":
             valid_inputs = {
                 name
-                for name, desc in manifest_inputs.items()
+                for name, desc in signature_inputs.items()
                 if not desc.get("encode_only", False)
             }
         else:
-            valid_inputs = set(manifest_inputs.keys())
+            valid_inputs = set(signature_inputs.keys())
 
         # Active inputs: wired ports minus encode_only_inputs (skipped during decode).
         active_inputs = set(step.inputs.keys()) - set(step.encode_only_inputs)
         unknown = active_inputs - valid_inputs
         if unknown:
             errors.append(
-                f"inputs {sorted(unknown)} are not valid manifest {direction} inputs "
+                f"inputs {sorted(unknown)} are not valid signature {direction} inputs "
                 f"{sorted(valid_inputs)}"
             )
 
-    if "outputs" in manifest:
-        manifest_outputs = set(manifest["outputs"].keys())
+    if "outputs" in signature:
+        signature_outputs = set(signature["outputs"].keys())
         declared_outputs = set(step.outputs)
-        unknown_outputs = declared_outputs - manifest_outputs
+        unknown_outputs = declared_outputs - signature_outputs
         if unknown_outputs:
             errors.append(
-                f"outputs {sorted(unknown_outputs)} are not valid manifest outputs "
-                f"{sorted(manifest_outputs)}"
+                f"outputs {sorted(unknown_outputs)} are not valid signature outputs "
+                f"{sorted(signature_outputs)}"
             )
 
     if errors:
         joined = "; ".join(errors)
-        msg = f"Step {step.name!r}: {joined} (from {manifest_path})"
+        msg = f"Step {step.name!r}: {joined} (from {signature_path})"
         raise ValueError(msg)
 
 

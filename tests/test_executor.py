@@ -42,9 +42,9 @@ class TestRunWiring:
     """Verify executor wiring logic using mocked component calls."""
 
     @pytest.fixture(autouse=True)
-    def _skip_manifest_validation(self):
-        """Patch out manifest validation so wiring tests need no sidecar files."""
-        with patch("chonkle.executor._validate_manifest"):
+    def _skip_signature_validation(self):
+        """Patch out signature validation so wiring tests need no sidecar files."""
+        with patch("chonkle.executor._validate_signature"):
             yield
 
     def test_passes_input_bytes_to_step(self, raw_chunk: bytes) -> None:
@@ -351,9 +351,9 @@ class TestRunWiring:
 
 class TestResolveUriIntegration:
     @pytest.fixture(autouse=True)
-    def _skip_manifest_validation(self):
-        """Patch out manifest validation so URI tests need no sidecar files."""
-        with patch("chonkle.executor._validate_manifest"):
+    def _skip_signature_validation(self):
+        """Patch out signature validation so URI tests need no sidecar files."""
+        with patch("chonkle.executor._validate_signature"):
             yield
 
     def test_https_uri_calls_resolve_uri(self) -> None:
@@ -409,8 +409,8 @@ class TestResolveUriIntegration:
         mock_resolve.assert_called_once_with("file:///fake.wasm", force_download=True)
 
 
-class TestManifestValidation:
-    """Manifest format: protospec codec signature — inputs/outputs are dicts."""
+class TestSignatureValidation:
+    """Signature format: protospec codec signature — inputs/outputs are dicts."""
 
     def _make_pipeline(
         self,
@@ -421,7 +421,7 @@ class TestManifestValidation:
         step_outputs: list | None = None,
         encode_only_inputs: list | None = None,
     ) -> Pipeline:
-        """Build a single-step pipeline for manifest validation tests."""
+        """Build a single-step pipeline for signature validation tests."""
         if step_inputs is None:
             step_inputs = {"bytes": "input.bytes"}
         if step_outputs is None:
@@ -456,35 +456,35 @@ class TestManifestValidation:
             }
         )
 
-    def test_manifest_mismatch_raises(self, tmp_path: Path) -> None:
-        """A manifest with an unknown output port name raises ValueError."""
+    def test_signature_mismatch_raises(self, tmp_path: Path) -> None:
+        """A signature with an unknown output port name raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"wrong_port": {"type": "bytes"}},
         }
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         pipeline = self._make_pipeline(wasm_file, step_outputs=["bytes"])
 
         with (
             patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="not valid manifest outputs"),
+            pytest.raises(ValueError, match="not valid signature outputs"),
         ):
             run(pipeline, {"bytes": b"data"})
 
-    def test_matching_manifest_does_not_raise(self, tmp_path: Path) -> None:
-        """A manifest matching declared ports does not raise."""
+    def test_matching_signature_does_not_raise(self, tmp_path: Path) -> None:
+        """A signature matching declared ports does not raise."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {
                 "bytes": {"type": "bytes", "required": True},
                 "level": {"type": "int", "required": False, "encode_only": True},
             },
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         pipeline = self._make_pipeline(
             wasm_file,
             step_inputs={"bytes": "input.bytes"},
@@ -499,16 +499,16 @@ class TestManifestValidation:
 
         assert result == {"bytes": b"out"}
 
-    def test_manifest_unknown_input_raises(self, tmp_path: Path) -> None:
-        """A step wiring a port not in the manifest inputs raises ValueError."""
+    def test_signature_unknown_input_raises(self, tmp_path: Path) -> None:
+        """A step wiring a port not in the signature inputs raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
-        # Step wires "wrong" which is not in manifest inputs
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        # Step wires "wrong" which is not in signature inputs
         pipeline = self._make_pipeline(
             wasm_file,
             step_inputs={"wrong": "input.bytes"},
@@ -517,22 +517,22 @@ class TestManifestValidation:
 
         with (
             patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="not valid manifest encode inputs"),
+            pytest.raises(ValueError, match="not valid signature encode inputs"),
         ):
             run(pipeline, {"bytes": b"data"})
 
-    def test_manifest_encode_only_excluded_during_decode(self, tmp_path: Path) -> None:
+    def test_signature_encode_only_excluded_during_decode(self, tmp_path: Path) -> None:
         """encode_only inputs are excluded from valid decode inputs; no raise."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {
                 "bytes": {"type": "bytes", "required": True},
                 "level": {"type": "int", "required": False, "encode_only": True},
             },
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         # Step wires "level" but marks it as encode_only; decode direction skips it
         pipeline = self._make_pipeline(
             wasm_file,
@@ -550,15 +550,15 @@ class TestManifestValidation:
 
         assert result == {"bytes": b"out"}
 
-    def test_manifest_subset_output_passes(self, tmp_path: Path) -> None:
-        """Declaring fewer outputs than the manifest advertises is valid."""
+    def test_signature_subset_output_passes(self, tmp_path: Path) -> None:
+        """Declaring fewer outputs than the signature advertises is valid."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}, "checksum": {"type": "bytes"}},
         }
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         # Step only declares "bytes", not "checksum"
         pipeline = self._make_pipeline(wasm_file, step_outputs=["bytes"])
 
@@ -570,12 +570,12 @@ class TestManifestValidation:
 
         assert result == {"bytes": b"out"}
 
-    def test_manifest_outputs_key_absent_skips_check(self, tmp_path: Path) -> None:
-        """A manifest with no 'outputs' key skips output validation."""
+    def test_signature_outputs_key_absent_skips_check(self, tmp_path: Path) -> None:
+        """A signature with no 'outputs' key skips output validation."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {"inputs": {"bytes": {"type": "bytes", "required": True}}}
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        signature = {"inputs": {"bytes": {"type": "bytes", "required": True}}}
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -586,12 +586,12 @@ class TestManifestValidation:
 
         assert result == {"bytes": b"out"}
 
-    def test_manifest_inputs_key_absent_skips_check(self, tmp_path: Path) -> None:
-        """A manifest with no 'inputs' key skips input validation."""
+    def test_signature_inputs_key_absent_skips_check(self, tmp_path: Path) -> None:
+        """A signature with no 'inputs' key skips input validation."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {"outputs": {"bytes": {"type": "bytes"}}}
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        signature = {"outputs": {"bytes": {"type": "bytes"}}}
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -602,15 +602,15 @@ class TestManifestValidation:
 
         assert result == {"bytes": b"out"}
 
-    def test_manifest_both_wrong_reports_both(self, tmp_path: Path) -> None:
+    def test_signature_both_wrong_reports_both(self, tmp_path: Path) -> None:
         """When both inputs and outputs are wrong, the error reports both."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.manifest.json").write_text(json.dumps(manifest))
+        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
         pipeline = self._make_pipeline(
             wasm_file,
             step_inputs={"bad_in": "input.bytes"},
@@ -620,38 +620,38 @@ class TestManifestValidation:
         with (
             patch("chonkle.executor.resolve_uri", return_value=wasm_file),
             pytest.raises(
-                ValueError, match="not valid manifest encode inputs"
+                ValueError, match="not valid signature encode inputs"
             ) as exc_info,
         ):
             run(pipeline, {"bytes": b"data"})
 
-        assert "not valid manifest outputs" in str(exc_info.value)
+        assert "not valid signature outputs" in str(exc_info.value)
 
-    def test_missing_manifest_raises(self, tmp_path: Path) -> None:
-        """A codec with no .manifest.json sidecar raises ValueError."""
+    def test_missing_signature_raises(self, tmp_path: Path) -> None:
+        """A codec with no .signature.json sidecar raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        # Deliberately omit codec.manifest.json
+        # Deliberately omit codec.signature.json
         pipeline = self._make_pipeline(wasm_file)
 
         with (
             patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="manifest not found"),
+            pytest.raises(ValueError, match="signature not found"),
         ):
             run(pipeline, {"bytes": b"data"})
 
     def test_two_steps_both_wrong_reports_both(self, tmp_path: Path) -> None:
-        """Manifest errors from multiple steps are all reported in one exception."""
+        """Signature errors from multiple steps are all reported in one exception."""
         wasm_a = tmp_path / "codec_a.wasm"
         wasm_b = tmp_path / "codec_b.wasm"
         wasm_a.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         wasm_b.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        manifest = {
+        signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec_a.manifest.json").write_text(json.dumps(manifest))
-        (tmp_path / "codec_b.manifest.json").write_text(json.dumps(manifest))
+        (tmp_path / "codec_a.signature.json").write_text(json.dumps(signature))
+        (tmp_path / "codec_b.signature.json").write_text(json.dumps(signature))
 
         pipeline = Pipeline.parse(
             {

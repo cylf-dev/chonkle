@@ -2,13 +2,13 @@
 
 A pipeline is a DAG of codec steps defined in a JSON file. A pipeline JSON is
 an *implementation* — it describes the DAG, the wiring, and the baked-in
-constants. It is not a codec manifest, and its schema is not the same as a
-manifest's.
+constants. It is not a codec signature, and its schema is not the same as a
+signature's.
 
-A pipeline is conceptually a codec: a codec manifest for the pipeline could be
+A pipeline is conceptually a codec: a codec signature for the pipeline could be
 derived from the pipeline JSON. The input names and types come directly from the
 `inputs` field, and the output types can be inferred by tracing each output
-wiring reference back through the step manifests. If a pipeline were also compiled to a `.wasm` component implementing the
+wiring reference back through the step signatures. If a pipeline were also compiled to a `.wasm` component implementing the
 `chonkle:codec/transform` WIT interface, it could appear as a step inside
 another pipeline — enabling hierarchical composition. This is not a
 hypothetical: the Wasm Component Model supports composing multiple components
@@ -37,7 +37,7 @@ JSON would drive that composition, and the result would be a self-contained
 ```
 
 ### `codec_id` (string, required)
-The canonical identifier for this pipeline. Used in any derived codec manifest
+The canonical identifier for this pipeline. Used in any derived codec signature
 and in a future registry for resolving this pipeline as a step in outer pipelines.
 
 ### `direction` (string, required)
@@ -54,7 +54,7 @@ name; each value is a descriptor:
   `"bool"`, `"uint[]"`, `"dtype_desc"`.
 - `encode_only` (bool, optional): if true, this input is only meaningful during
   encoding. It is omitted from the port-map during decode, and any derived codec
-  manifest will carry this annotation so that outer pipelines can handle it
+  signature will carry this annotation so that outer pipelines can handle it
   correctly.
 
 `required` and `default` are intentionally absent. Those properties belong to a
@@ -76,7 +76,7 @@ Encode-only routing for constant-sourced ports is handled at the step level via
 
 Constants are a convenience for pipeline authors: they are a way of saying "I
 have made this decision for the caller." Conceptually, a constant is just an
-input whose value the pipeline author has pre-decided. If a codec manifest were
+input whose value the pipeline author has pre-decided. If a codec signature were
 derived from the pipeline, each constant would appear as an optional input with
 the constant's value as its default — invisible to callers who don't care, but
 overridable by callers who do.
@@ -86,7 +86,7 @@ Maps each pipeline output port name to the step port that produces it. The key
 is the name callers use to retrieve results from the returned port-map; the value
 is a wiring reference of the form `step_name.port_name`. An output port may be
 renamed relative to the source step's port name. Types are not declared here —
-they are derived from the source step's codec manifest during validation.
+they are derived from the source step's codec signature during validation.
 
 ### `steps` (array, required)
 An ordered array of step objects. See [Steps](#steps) below.
@@ -115,26 +115,26 @@ downstream steps and pipeline outputs (`step_name.port_name`). Multiple steps
 may share a `codec_id` but must have distinct `name` values.
 
 ### `codec_id` (string, required)
-The logical codec identifier. Matched against the codec manifest's `codec_id`
+The logical codec identifier. Matched against the codec signature's `codec_id`
 during validation.
 
 ### `src` (string, required)
 URI of the codec's `.wasm` file. Supported schemes: `file://`, `https://`,
-`oci://`. A `.manifest.json` sidecar is expected at the same location (or as
+`oci://`. A `.signature.json` sidecar is expected at the same location (or as
 a layer in the same OCI artifact).
 
 ### `inputs` (object, required)
 Maps each codec input port name to a wiring reference. The key is the port name
-as declared in the codec manifest; the value is a wiring reference (see
+as declared in the codec signature; the value is a wiring reference (see
 [Wiring References](#wiring-references)). No type information is included —
-types are in the codec manifest.
+types are in the codec signature.
 
 ### `outputs` (array of strings, required)
 The output port names this step exposes for downstream wiring. Port names must
-match ports declared in the codec manifest. Types are not included — they are in
-the codec manifest. This field is retained (rather than being omitted entirely) to enable parse-time
+match ports declared in the codec signature. Types are not included — they are in
+the codec signature. This field is retained (rather than being omitted entirely) to enable parse-time
 wiring validation: a parser can confirm that every downstream reference to
-`step_name.port_name` points to a declared output without loading any manifest.
+`step_name.port_name` points to a declared output without loading any signature.
 
 ### `encode_only_inputs` (array of strings, optional)
 Input port names that are excluded from the port-map when running in the decode
@@ -155,9 +155,9 @@ A wiring reference is a dot-notation string identifying the source of a value:
 | `<step_name>.<port>` | An output port of a named step |
 
 All wiring references are validated at parse time against declared inputs,
-constants, and step outputs. Manifest-level type compatibility (checking that
+constants, and step outputs. Signature-level type compatibility (checking that
 the source type matches the destination type) is validated in a separate
-pre-execution pass once all codec manifests are loaded.
+pre-execution pass once all codec signatures are loaded.
 
 ---
 
@@ -187,7 +187,7 @@ on insertion order. The step name is moved into the object as the `name` field.
 `"codec_id": "zstd"`
 
 `codec_id` is the consistent term for a codec identifier throughout the rest
-of the schema (top-level `codec_id`, codec manifests). Using `codec` in steps
+of the schema (top-level `codec_id`, codec signatures). Using `codec` in steps
 would be the only place the shorter form appeared.
 
 ### `src` added to steps
@@ -227,7 +227,7 @@ name and how downstream steps refer to it (`step_name.alias`). Our wiring
 references use the codec port name directly (`step_name.port_name`), making the
 alias layer unnecessary. Removing it also removes the only reason for the value
 side of the object. A list of port names is sufficient: it keeps the pipeline
-human-readable without manifests, and enables parse-time wiring validation.
+human-readable without signatures, and enables parse-time wiring validation.
 
 ### `encode_only` on pipeline inputs
 
@@ -238,23 +238,23 @@ on pipeline inputs in any protospec example
 **Ours**:
 `encode_only` is permitted on pipeline inputs
 
-A pipeline's derived codec manifest needs `encode_only` annotations so that
+A pipeline's derived codec signature needs `encode_only` annotations so that
 outer pipelines — and eventually a compiled `.wasm` component — know which
 inputs to omit during decode. The protospec does not show this on pipeline
-inputs, but it is a logical extension of the same property on codec manifest
+inputs, but it is a logical extension of the same property on codec signature
 inputs.
 
 ### `encode_only_inputs` added to steps
 
 **Protospec**:
-`encode_only` is a property of codec manifest inputs, not pipeline
+`encode_only` is a property of codec signature inputs, not pipeline
 steps
 
 **Ours**:
 `"encode_only_inputs": ["level"]` on the step
 
-The protospec records `encode_only` in the codec manifest. Our executor needs
-to know which inputs to skip during decode at parse time, before manifests are
+The protospec records `encode_only` in the codec signature. Our executor needs
+to know which inputs to skip during decode at parse time, before signatures are
 loaded. Surfacing this on the step makes the pipeline self-contained for routing
 purposes and allows validation at parse time. It is expected to be consistent
-with the codec manifest; a future validation pass may enforce this.
+with the codec signature; a future validation pass may enforce this.

@@ -67,7 +67,7 @@ class TestDownloadHttps:
             path2 = download_https(url, cache_dir=tmp_path)
 
         assert path1 == path2
-        # Two calls per download (wasm + manifest.json sidecar); second
+        # Two calls per download (wasm + signature.json sidecar); second
         # download_https is a cache hit so no additional calls.
         assert mock.call_count == 2
 
@@ -79,7 +79,7 @@ class TestDownloadHttps:
             download_https(url, cache_dir=tmp_path)
             download_https(url, cache_dir=tmp_path, force=True)
 
-        # Two downloads x two files (wasm + manifest.json sidecar) each.
+        # Two downloads x two files (wasm + signature.json sidecar) each.
         assert mock.call_count == 4
 
 
@@ -90,10 +90,10 @@ class TestDownloadOci:
         def fake_pull(*, target, outdir):
             Path(outdir).mkdir(parents=True, exist_ok=True)
             (Path(outdir) / "codec.wasm").write_bytes(wasm_bytes)
-            (Path(outdir) / "codec.manifest.json").write_bytes(b"{}")
+            (Path(outdir) / "codec.signature.json").write_bytes(b"{}")
             return [
                 str(Path(outdir) / "codec.wasm"),
-                str(Path(outdir) / "codec.manifest.json"),
+                str(Path(outdir) / "codec.signature.json"),
             ]
 
         mock_client = MagicMock()
@@ -115,7 +115,7 @@ class TestDownloadOci:
         ref_dir.mkdir(parents=True)
         cached = ref_dir / "codec.wasm"
         cached.write_bytes(b"\x00asm\x01\x00\x00\x00")
-        (ref_dir / "codec.manifest.json").write_bytes(b"{}")
+        (ref_dir / "codec.signature.json").write_bytes(b"{}")
 
         mock_client = MagicMock()
 
@@ -133,11 +133,11 @@ class TestDownloadOci:
         ref_dir.mkdir(parents=True)
         cached = ref_dir / "codec.wasm"
         cached.write_bytes(b"\x00asm\x01\x00\x00\x00")
-        manifest = ref_dir / "codec.manifest.json"
-        manifest.write_bytes(b"{}")
+        signature = ref_dir / "codec.signature.json"
+        signature.write_bytes(b"{}")
 
         mock_client = MagicMock()
-        mock_client.pull.return_value = [str(cached), str(manifest)]
+        mock_client.pull.return_value = [str(cached), str(signature)]
 
         with patch(ORAS_CLIENT, return_value=mock_client):
             download_oci(

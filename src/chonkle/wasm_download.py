@@ -83,27 +83,27 @@ def _should_force() -> bool:
     return os.environ.get("CHONKLE_FORCE_DOWNLOAD", "") == "1"
 
 
-def _derive_manifest_url(wasm_url: str) -> str:
-    """Derive the ``.manifest.json`` sidecar URL from a ``.wasm`` HTTPS URL.
+def _derive_signature_url(wasm_url: str) -> str:
+    """Derive the ``.signature.json`` sidecar URL from a ``.wasm`` HTTPS URL.
 
-    Replaces the filename in the URL path with ``{stem}.manifest.json``,
+    Replaces the filename in the URL path with ``{stem}.signature.json``,
     preserving the scheme, host, and all other path components. For
     example::
 
         https://example.com/codecs/zstd.wasm
-        → https://example.com/codecs/zstd.manifest.json
+        → https://example.com/codecs/zstd.signature.json
 
     Args:
         wasm_url: The HTTPS URL of the ``.wasm`` file.
 
     Returns:
-        The HTTPS URL of the corresponding ``.manifest.json`` file.
+        The HTTPS URL of the corresponding ``.signature.json`` file.
     """
     parsed = urllib.parse.urlparse(wasm_url)
     path = PurePosixPath(parsed.path)
-    manifest_name = path.stem + ".manifest.json"
-    manifest_path = str(path.parent / manifest_name)
-    return urllib.parse.urlunparse(parsed._replace(path=manifest_path))
+    signature_name = path.stem + ".signature.json"
+    signature_path = str(path.parent / signature_name)
+    return urllib.parse.urlunparse(parsed._replace(path=signature_path))
 
 
 def _download_url_to(url: str, dest: Path, dest_dir: Path) -> None:
@@ -134,7 +134,7 @@ def _download_url_to(url: str, dest: Path, dest_dir: Path) -> None:
 def download_https(
     url: str, *, cache_dir: Path | None = None, force: bool = False
 ) -> Path:
-    """Download a ``.wasm`` file and its ``.manifest.json`` sidecar from HTTPS.
+    """Download a ``.wasm`` file and its ``.signature.json`` sidecar from HTTPS.
 
     Both files are stored under a cache subdirectory keyed by the
     SHA-256 hash of the ``.wasm`` URL. If both are already present and
@@ -142,8 +142,8 @@ def download_https(
     cached path is returned without re-downloading.
 
     Args:
-        url: The HTTPS URL of the ``.wasm`` file. The manifest URL is
-            derived by replacing ``.wasm`` with ``.manifest.json`` in
+        url: The HTTPS URL of the ``.wasm`` file. The signature URL is
+            derived by replacing ``.wasm`` with ``.signature.json`` in
             the path component.
         cache_dir: Root directory for the cache. Defaults to the
             result of ``get_cache_dir()``.
@@ -160,17 +160,17 @@ def download_https(
     dest_dir = cache_dir / "https" / url_hash
     dest = dest_dir / filename
 
-    manifest_url = _derive_manifest_url(url)
-    manifest_filename = PurePosixPath(urllib.parse.urlparse(manifest_url).path).name
-    manifest_dest = dest_dir / manifest_filename
+    signature_url = _derive_signature_url(url)
+    signature_filename = PurePosixPath(urllib.parse.urlparse(signature_url).path).name
+    signature_dest = dest_dir / signature_filename
 
-    already_cached = dest.exists() and manifest_dest.exists()
+    already_cached = dest.exists() and signature_dest.exists()
     if already_cached and not force and not _should_force():
         return dest
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     _download_url_to(url, dest, dest_dir)
-    _download_url_to(manifest_url, manifest_dest, dest_dir)
+    _download_url_to(signature_url, signature_dest, dest_dir)
 
     return dest
 
@@ -178,10 +178,10 @@ def download_https(
 def download_oci(
     uri: str, *, cache_dir: Path | None = None, force: bool = False
 ) -> Path:
-    """Pull a ``.wasm`` codec and its ``.manifest.json`` sidecar from an OCI registry.
+    """Pull a ``.wasm`` codec and its ``.signature.json`` sidecar from an OCI registry.
 
     The artifact must contain both a ``.wasm`` layer and a
-    ``.manifest.json`` layer. Pull output is cached under a directory
+    ``.signature.json`` layer. Pull output is cached under a directory
     derived from the OCI reference. If the cache directory already
     contains both file types and neither ``force`` nor
     ``CHONKLE_FORCE_DOWNLOAD=1`` is active, the cached path is returned
@@ -199,7 +199,7 @@ def download_oci(
 
     Raises:
         ValueError: If the OCI artifact contains no ``.wasm`` file
-            or no ``.manifest.json`` sidecar.
+            or no ``.signature.json`` sidecar.
     """
     if cache_dir is None:
         cache_dir = get_cache_dir()
@@ -209,8 +209,8 @@ def download_oci(
 
     if not force and not _should_force() and ref_dir.exists():
         wasm_files = list(ref_dir.glob("*.wasm"))
-        manifest_files = list(ref_dir.glob("*.manifest.json"))
-        if wasm_files and manifest_files:
+        signature_files = list(ref_dir.glob("*.signature.json"))
+        if wasm_files and signature_files:
             return wasm_files[0]
 
     ref_dir.mkdir(parents=True, exist_ok=True)
@@ -233,9 +233,9 @@ def download_oci(
         msg = "No .wasm file found in OCI artifact"
         raise ValueError(msg)
 
-    manifest_files = [Path(f) for f in files if f.endswith(".manifest.json")]
-    if not manifest_files:
-        msg = "No .manifest.json sidecar found in OCI artifact"
+    signature_files = [Path(f) for f in files if f.endswith(".signature.json")]
+    if not signature_files:
+        msg = "No .signature.json sidecar found in OCI artifact"
         raise ValueError(msg)
 
     return wasm_files[0]
