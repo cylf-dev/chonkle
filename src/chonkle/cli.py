@@ -42,6 +42,16 @@ def main() -> None:
         help="Write named output port to file: --output bytes=result.bin (repeatable).",
     )
     run_parser.add_argument(
+        "--direction",
+        choices=["encode", "decode"],
+        default=None,
+        help=(
+            "Direction to run the pipeline "
+            "(default: the pipeline's declared direction). "
+            "Specifying the opposite direction inverts the DAG."
+        ),
+    )
+    run_parser.add_argument(
         "--force-download",
         action="store_true",
         default=False,
@@ -65,7 +75,8 @@ def _run_command(args: argparse.Namespace) -> None:
         name, path = spec.split("=", 1)
         inputs[name] = Path(path).read_bytes()
 
-    result = run(pipeline, inputs, force_download=args.force_download)
+    direction = args.direction if args.direction is not None else pipeline.direction
+    result = run(pipeline, inputs, direction, force_download=args.force_download)
 
     requested_outputs: dict[str, str] = {}
     for spec in args.outputs:

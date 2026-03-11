@@ -10,7 +10,7 @@ from typing import Any
 import wasmtime
 import wasmtime.component
 
-from chonkle.pipeline import Pipeline, StepSpec
+from chonkle.pipeline import Direction, Pipeline, StepSpec
 from chonkle.wasm_download import resolve_uri
 
 log = logging.getLogger(__name__)
@@ -21,37 +21,51 @@ type PortMap = list[tuple[str, bytes]]
 def run(
     pipeline: Pipeline,
     inputs: dict[str, bytes],
+    direction: Direction,
     *,
     force_download: bool = False,
 ) -> dict[str, bytes]:
-    """Execute a pipeline and return the named output port values.
+    """Execute a pipeline in the specified direction and return output port values.
 
     Args:
         pipeline: Parsed and validated pipeline DAG.
-        inputs: Pipeline-level input names mapped to byte values.
+        inputs: Pipeline-level input names mapped to byte values.  For forward
+            execution (``direction == pipeline.direction``) keys correspond to
+            ``pipeline.inputs`` names.  For inverted execution keys correspond
+            to ``pipeline.outputs`` names — the caller provides data for the
+            "other side" of the pipeline boundary.
+        direction: Direction to execute: ``"decode"`` or ``"encode"``.
+            May differ from ``pipeline.direction`` to invert the DAG.
         force_download: Re-download codec .wasm files even if cached.
 
     Returns:
-        Pipeline output names mapped to byte values.
+        Pipeline output names mapped to byte values.  For forward execution
+        the keys are ``pipeline.outputs`` names; for inverted execution the
+        keys are ``pipeline.inputs`` data-port names.
 
     Raises:
         ValueError: A required input is missing or signature validation fails.
         RuntimeError: A codec component call returns an error.
     """
-    direction = pipeline.direction
-    if direction == "decode":
-        active_inputs = [
+    inverted = direction != pipeline.direction
+
+    if not inverted:
+        # Forward: require pipeline.inputs keys; skip encode_only for decode.
+        required = [
             name
             for name, desc in pipeline.inputs.items()
-            if not desc.get("encode_only", False)
+            if direction == "encode" or not desc.get("encode_only", False)
         ]
+        for name in required:
+            if name not in inputs:
+                msg = f"Missing pipeline input: {name!r}"
+                raise ValueError(msg)
     else:
-        active_inputs = list(pipeline.inputs)
-
-    for name in active_inputs:
-        if name not in inputs:
-            msg = f"Missing pipeline input: {name!r}"
-            raise ValueError(msg)
+        # Inverted: require pipeline.outputs keys (the "other side").
+        for name in pipeline.outputs:
+            if name not in inputs:
+                msg = f"Missing pipeline input: {name!r}"
+                raise ValueError(msg)
 
     step_by_name = {s.name: s for s in pipeline.steps}
 
@@ -59,10 +73,10 @@ def run(
     wasm_paths = _resolve_uris(pipeline, step_by_name, force_download=force_download)
 
     # Phase 2: validate all signatures before any component is called.
-    _validate_signatures(pipeline, step_by_name, wasm_paths)
+    _validate_signatures(pipeline, step_by_name, wasm_paths, direction)
 
-    # Phase 3: execute steps in topological order.
-    return _execute_steps(pipeline, step_by_name, wasm_paths, inputs, active_inputs)
+    # Phase 3: execute steps in topological order (or reversed for inversion).
+    return _execute_steps(pipeline, step_by_name, wasm_paths, inputs, direction)
 
 
 def _execute_steps(
@@ -70,20 +84,23 @@ def _execute_steps(
     step_by_name: dict[str, StepSpec],
     wasm_paths: dict[str, Path],
     inputs: dict[str, bytes],
-    active_inputs: list[str],
+    direction: Direction,
 ) -> dict[str, bytes]:
-    """Execute pipeline steps in topological order and return the output port values.
+    """Execute pipeline steps and return the output port values.
 
-    Seeds a value_store (wiring-ref → bytes) with active inputs and serialized
-    constants, then calls each step's codec component in execution order, routing
-    outputs into the store for downstream steps to consume.
+    For forward execution seeds value_store with pipeline inputs and constants,
+    then runs steps in topological order calling the ``direction`` WIT function.
+
+    For inverted execution seeds value_store from pipeline outputs (caller's
+    inputs), runs steps in reversed order calling the opposite WIT function,
+    and routes each step's results backward through its input wiring refs.
 
     Args:
         pipeline: Validated pipeline with execution_order, constants, and outputs.
         step_by_name: Step name to StepSpec lookup.
         wasm_paths: Step name to resolved local .wasm path.
-        inputs: Pipeline-level input names mapped to byte values.
-        active_inputs: Input names active for the pipeline's direction.
+        inputs: Caller-provided byte values.
+        direction: Runtime execution direction.
 
     Returns:
         Pipeline output names mapped to byte values.
@@ -91,32 +108,46 @@ def _execute_steps(
     Raises:
         RuntimeError: A codec component call fails or returns an Err result.
     """
-    direction = pipeline.direction
+    inverted = direction != pipeline.direction
     value_store: dict[str, bytes] = {}
 
-    for name in active_inputs:
-        value_store[f"input.{name}"] = inputs[name]
-
-    # Constants are serialized as UTF-8 JSON bytes so codecs receive them
-    # as a self-describing byte payload.
+    # Constants are serialized as UTF-8 JSON bytes.  Always seeded regardless
+    # of direction.
     for name, descriptor in pipeline.constants.items():
         value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
+
+    if not inverted:
+        active_inputs = [
+            name
+            for name, desc in pipeline.inputs.items()
+            if direction == "encode" or not desc.get("encode_only", False)
+        ]
+        for name in active_inputs:
+            value_store[f"input.{name}"] = inputs[name]
+    else:
+        # Inverted: seed from pipeline outputs — the wiring refs pointing into
+        # step outputs become the initial values for the reversed traversal.
+        for out_name, ref_str in pipeline.outputs.items():
+            value_store[ref_str] = inputs[out_name]
 
     config = wasmtime.Config()
     config.cache = True
     engine = wasmtime.Engine(config)
 
-    for step_name in pipeline.execution_order:
+    step_order = (
+        list(reversed(pipeline.execution_order))
+        if inverted
+        else pipeline.execution_order
+    )
+
+    for step_name in step_order:
         step = step_by_name[step_name]
         wasm_path = wasm_paths[step_name]
 
-        # Build the input port-map.  encode_only_inputs are omitted during
-        # decode so the codec does not receive stale or unavailable data.
-        port_map: PortMap = []
-        for port_name, ref_str in step.inputs.items():
-            if direction == "decode" and port_name in step.encode_only_inputs:
-                continue
-            port_map.append((port_name, value_store[ref_str]))
+        if not inverted:
+            port_map = _build_forward_port_map(step, value_store, direction)
+        else:
+            port_map = _build_inverted_port_map(step_name, step, value_store, direction)
 
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
@@ -124,12 +155,82 @@ def _execute_steps(
 
         output_map = _call_component(engine, wasm_path, direction, port_map)
 
-        for port_name, value in output_map:
-            value_store[f"{step_name}.{port_name}"] = value
+        if not inverted:
+            for port_name, value in output_map:
+                value_store[f"{step_name}.{port_name}"] = value
+        else:
+            _store_inverted_outputs(step, output_map, value_store)
 
+    if not inverted:
+        return {
+            out_name: value_store[ref_str]
+            for out_name, ref_str in pipeline.outputs.items()
+        }
+
+    # Inverted: collect from pipeline.inputs ports.
+    # encode_only ports included when direction is encode; excluded for decode.
     return {
-        out_name: value_store[ref_str] for out_name, ref_str in pipeline.outputs.items()
+        name: value_store[f"input.{name}"]
+        for name, desc in pipeline.inputs.items()
+        if direction == "encode" or not desc.get("encode_only", False)
     }
+
+
+def _build_forward_port_map(
+    step: StepSpec,
+    value_store: dict[str, bytes],
+    direction: Direction,
+) -> PortMap:
+    """Build the port-map for a step in forward execution.
+
+    Iterates step.inputs, omitting encode_only_inputs when direction is decode.
+    """
+    port_map: PortMap = []
+    for port_name, ref_str in step.inputs.items():
+        if direction == "decode" and port_name in step.encode_only_inputs:
+            continue
+        port_map.append((port_name, value_store[ref_str]))
+    return port_map
+
+
+def _build_inverted_port_map(
+    step_name: str,
+    step: StepSpec,
+    value_store: dict[str, bytes],
+    direction: Direction,
+) -> PortMap:
+    """Build the port-map for a step in inverted execution.
+
+    The step's forward-direction outputs become its inverted-direction inputs.
+    encode_only_inputs are appended when calling encode (they are codec
+    parameters, e.g. compression level).
+    """
+    port_map: PortMap = []
+    for port_name in step.outputs:
+        val = value_store.get(f"{step_name}.{port_name}")
+        if val is not None:
+            port_map.append((port_name, val))
+    if direction == "encode":
+        for port_name in step.encode_only_inputs:
+            port_map.append((port_name, value_store[step.inputs[port_name]]))
+    return port_map
+
+
+def _store_inverted_outputs(
+    step: StepSpec,
+    output_map: PortMap,
+    value_store: dict[str, bytes],
+) -> None:
+    """Route inverted step results back through the step's input wiring refs.
+
+    The codec's encode/decode call returns ports corresponding to the step's
+    decode-direction data inputs.  Each returned port is mapped through
+    step.inputs to store the value at the correct wiring ref key.
+    encode_only_inputs are parameters, not data outputs, so they are excluded.
+    """
+    for port_name, value in output_map:
+        if port_name in step.inputs and port_name not in step.encode_only_inputs:
+            value_store[step.inputs[port_name]] = value
 
 
 def _resolve_uris(
@@ -158,6 +259,7 @@ def _validate_signatures(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
     wasm_paths: dict[str, Path],
+    direction: Direction,
 ) -> None:
     """Validate all step signatures before any component is called.
 
@@ -166,9 +268,10 @@ def _validate_signatures(
     on the first.
 
     Args:
-        pipeline: Pipeline providing execution_order and direction.
+        pipeline: Pipeline providing execution_order.
         step_by_name: Step name to StepSpec lookup.
         wasm_paths: Step name to resolved local .wasm path.
+        direction: Runtime execution direction (may differ from pipeline.direction).
 
     Raises:
         ValueError: One or more steps have signature validation errors.
@@ -179,7 +282,7 @@ def _validate_signatures(
         wasm_path = wasm_paths[step_name]
         signature_path = wasm_path.parent / (wasm_path.stem + ".signature.json")
         try:
-            _validate_signature(step, signature_path, pipeline.direction)
+            _validate_signature(step, signature_path, direction)
         except (ValueError, FileNotFoundError) as exc:
             errors.append(str(exc))
     if errors:
@@ -196,7 +299,7 @@ def _validate_signature(step: StepSpec, signature_path: Path, direction: str) ->
     Args:
         step: Step whose declared inputs and outputs are being checked.
         signature_path: Path to the .signature.json sidecar file.
-        direction: Pipeline direction ("encode" or "decode").
+        direction: Runtime execution direction ("encode" or "decode").
 
     Raises:
         FileNotFoundError: The signature sidecar does not exist.
