@@ -75,32 +75,41 @@ def run(
     # Phase 2: validate all signatures before any component is called.
     _validate_signatures(pipeline, step_by_name, wasm_paths, direction)
 
-    # Phase 3: execute steps in topological order (or reversed for inversion).
-    return _execute_steps(pipeline, step_by_name, wasm_paths, inputs, direction)
+    # Phase 3: build the shared Wasmtime engine and execute.
+    config = wasmtime.Config()
+    config.cache = True
+    engine = wasmtime.Engine(config)
+
+    if direction != pipeline.direction:
+        return _execute_inverted(
+            pipeline, step_by_name, wasm_paths, inputs, direction, engine
+        )
+    return _execute_forward(
+        pipeline, step_by_name, wasm_paths, inputs, direction, engine
+    )
 
 
-def _execute_steps(
+def _execute_forward(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
     wasm_paths: dict[str, Path],
     inputs: dict[str, bytes],
     direction: Direction,
+    engine: wasmtime.Engine,
 ) -> dict[str, bytes]:
-    """Execute pipeline steps and return the output port values.
+    """Execute pipeline steps in topological order (forward direction).
 
-    For forward execution seeds value_store with pipeline inputs and constants,
-    then runs steps in topological order calling the ``direction`` WIT function.
-
-    For inverted execution seeds value_store from pipeline outputs (caller's
-    inputs), runs steps in reversed order calling the opposite WIT function,
-    and routes each step's results backward through its input wiring refs.
+    Seeds value_store with constants and pipeline inputs (omitting encode_only
+    inputs when direction is ``"decode"``), then runs each step calling the
+    ``direction`` WIT function.
 
     Args:
         pipeline: Validated pipeline with execution_order, constants, and outputs.
         step_by_name: Step name to StepSpec lookup.
         wasm_paths: Step name to resolved local .wasm path.
-        inputs: Caller-provided byte values.
+        inputs: Caller-provided byte values keyed by pipeline input names.
         direction: Runtime execution direction.
+        engine: Shared Wasmtime engine (carries the compilation cache).
 
     Returns:
         Pipeline output names mapped to byte values.
@@ -108,67 +117,84 @@ def _execute_steps(
     Raises:
         RuntimeError: A codec component call fails or returns an Err result.
     """
-    inverted = direction != pipeline.direction
     value_store: dict[str, bytes] = {}
 
-    # Constants are serialized as UTF-8 JSON bytes.  Always seeded regardless
-    # of direction.
     for name, descriptor in pipeline.constants.items():
         value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
 
-    if not inverted:
-        active_inputs = [
-            name
-            for name, desc in pipeline.inputs.items()
-            if direction == "encode" or not desc.get("encode_only", False)
-        ]
-        for name in active_inputs:
-            value_store[f"input.{name}"] = inputs[name]
-    else:
-        # Inverted: seed from pipeline outputs — the wiring refs pointing into
-        # step outputs become the initial values for the reversed traversal.
-        for out_name, ref_str in pipeline.outputs.items():
-            value_store[ref_str] = inputs[out_name]
+    active_inputs = [
+        name
+        for name, desc in pipeline.inputs.items()
+        if direction == "encode" or not desc.get("encode_only", False)
+    ]
+    for name in active_inputs:
+        value_store[f"input.{name}"] = inputs[name]
 
-    config = wasmtime.Config()
-    config.cache = True
-    engine = wasmtime.Engine(config)
-
-    step_order = (
-        list(reversed(pipeline.execution_order))
-        if inverted
-        else pipeline.execution_order
-    )
-
-    for step_name in step_order:
+    for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
-        wasm_path = wasm_paths[step_name]
-
-        if not inverted:
-            port_map = _build_forward_port_map(step, value_store, direction)
-        else:
-            port_map = _build_inverted_port_map(step_name, step, value_store, direction)
-
+        port_map = _build_forward_port_map(step, value_store, direction)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
+        output_map = _call_component(engine, wasm_paths[step_name], direction, port_map)
+        for port_name, value in output_map:
+            value_store[f"{step_name}.{port_name}"] = value
 
-        output_map = _call_component(engine, wasm_path, direction, port_map)
+    return {
+        out_name: value_store[ref_str] for out_name, ref_str in pipeline.outputs.items()
+    }
 
-        if not inverted:
-            for port_name, value in output_map:
-                value_store[f"{step_name}.{port_name}"] = value
-        else:
-            _store_inverted_outputs(step, output_map, value_store)
 
-    if not inverted:
-        return {
-            out_name: value_store[ref_str]
-            for out_name, ref_str in pipeline.outputs.items()
-        }
+def _execute_inverted(
+    pipeline: Pipeline,
+    step_by_name: dict[str, StepSpec],
+    wasm_paths: dict[str, Path],
+    inputs: dict[str, bytes],
+    direction: Direction,
+    engine: wasmtime.Engine,
+) -> dict[str, bytes]:
+    """Execute pipeline steps in reversed topological order (inverted direction).
 
-    # Inverted: collect from pipeline.inputs ports.
-    # encode_only ports included when direction is encode; excluded for decode.
+    Seeds value_store from pipeline output wiring refs (the caller provides
+    data for the "other side" of the pipeline boundary), then runs each step
+    in reverse calling the ``direction`` WIT function, routing results back
+    through input wiring refs.
+
+    Args:
+        pipeline: Validated pipeline with execution_order, constants, and outputs.
+        step_by_name: Step name to StepSpec lookup.
+        wasm_paths: Step name to resolved local .wasm path.
+        inputs: Caller-provided byte values keyed by pipeline output names.
+        direction: Runtime execution direction.
+        engine: Shared Wasmtime engine (carries the compilation cache).
+
+    Returns:
+        Pipeline input names mapped to byte values (excluding encode_only inputs
+        when direction is ``"decode"``).
+
+    Raises:
+        RuntimeError: A codec component call fails or returns an Err result.
+    """
+    value_store: dict[str, bytes] = {}
+
+    for name, descriptor in pipeline.constants.items():
+        value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
+
+    # Seed from pipeline outputs — wiring refs become the starting values for
+    # the reversed traversal.
+    for out_name, ref_str in pipeline.outputs.items():
+        value_store[ref_str] = inputs[out_name]
+
+    for step_name in reversed(pipeline.execution_order):
+        step = step_by_name[step_name]
+        port_map = _build_inverted_port_map(step_name, step, value_store, direction)
+        log.debug(
+            "step %r: calling %s with %d ports", step_name, direction, len(port_map)
+        )
+        output_map = _call_component(engine, wasm_paths[step_name], direction, port_map)
+        _store_inverted_outputs(step, output_map, value_store)
+
+    # Collect from pipeline inputs; encode_only ports excluded during decode.
     return {
         name: value_store[f"input.{name}"]
         for name, desc in pipeline.inputs.items()
