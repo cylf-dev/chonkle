@@ -145,167 +145,171 @@ class Pipeline:
             execution_order=[],
         )
 
-        pipeline._validate()
-        pipeline.execution_order = cls._topological_sort(steps)
+        _validate_pipeline(pipeline)
+        pipeline.execution_order = _topological_sort(steps)
         return pipeline
 
-    def _validate(self) -> None:
-        """Validate step declarations and all wiring references.
 
-        Performs the following checks in order:
+def _validate_pipeline(pipeline: Pipeline) -> None:
+    """Validate step declarations and all wiring references.
 
-        1. Step names are unique within the pipeline.
-        2. Every port listed in a step's ``encode_only_inputs`` is also
-           declared in that step's ``inputs``.
-        3. Every step input wiring reference resolves to a declared
-           pipeline input, constant, or an output port of another step.
-        4. Every pipeline output wiring reference resolves in the
-           same way.
+    Performs the following checks in order:
 
-        Raises:
-            ValueError: If any of the above checks fail.
-        """
-        step_names = {s.name for s in self.steps}
-        step_outputs = {s.name: set(s.outputs) for s in self.steps}
+    1. Step names are unique within the pipeline.
+    2. Every port listed in a step's ``encode_only_inputs`` is also
+       declared in that step's ``inputs``.
+    3. Every step input wiring reference resolves to a declared
+       pipeline input, constant, or an output port of another step.
+    4. Every pipeline output wiring reference resolves in the
+       same way.
 
-        seen: set[str] = set()
-        for step in self.steps:
-            if step.name in seen:
-                msg = f"Duplicate step name: {step.name!r}"
-                raise ValueError(msg)
-            seen.add(step.name)
+    Raises:
+        ValueError: If any of the above checks fail.
+    """
+    step_names = {s.name for s in pipeline.steps}
+    step_outputs = {s.name: set(s.outputs) for s in pipeline.steps}
 
-        for step in self.steps:
-            for eoi in step.encode_only_inputs:
-                if eoi not in step.inputs:
-                    msg = (
-                        f"Step {step.name!r}: encode_only_input {eoi!r} "
-                        "is not declared in inputs"
-                    )
-                    raise ValueError(msg)
-            for port_name, ref_str in step.inputs.items():
-                self._check_ref(
-                    ref_str,
-                    f"step {step.name!r} input {port_name!r}",
-                    step_names,
-                    step_outputs,
+    seen: set[str] = set()
+    for step in pipeline.steps:
+        if step.name in seen:
+            msg = f"Duplicate step name: {step.name!r}"
+            raise ValueError(msg)
+        seen.add(step.name)
+
+    for step in pipeline.steps:
+        for eoi in step.encode_only_inputs:
+            if eoi not in step.inputs:
+                msg = (
+                    f"Step {step.name!r}: encode_only_input {eoi!r} "
+                    "is not declared in inputs"
                 )
-
-        for out_name, ref_str in self.outputs.items():
-            self._check_ref(
+                raise ValueError(msg)
+        for port_name, ref_str in step.inputs.items():
+            _check_ref(
+                pipeline,
                 ref_str,
-                f"pipeline output {out_name!r}",
+                f"step {step.name!r} input {port_name!r}",
                 step_names,
                 step_outputs,
             )
 
-    def _check_ref(
-        self,
-        ref_str: str,
-        context: str,
-        step_names: set[str],
-        step_outputs: dict[str, set[str]],
-    ) -> None:
-        """Validate a single wiring reference against pipeline declarations.
+    for out_name, ref_str in pipeline.outputs.items():
+        _check_ref(
+            pipeline,
+            ref_str,
+            f"pipeline output {out_name!r}",
+            step_names,
+            step_outputs,
+        )
 
-        For ``input`` references, confirms the port is declared in
-        ``self.inputs``.  For ``constant`` references, confirms the
-        name is declared in ``self.constants``.  For step references,
-        confirms the step exists and that the referenced port is in
-        the step's declared outputs.
 
-        Args:
-            ref_str: The raw wiring reference string (e.g.
-                ``"input.bytes"`` or ``"zstd_step.bytes"``).
-            context: A human-readable label for the reference site,
-                used in error messages (e.g.
-                ``"step 'foo' input 'bytes'"``).
-            step_names: The set of all step names defined in the
-                pipeline.
-            step_outputs: Mapping from step name to the set of output
-                port names that step declares.
+def _check_ref(
+    pipeline: Pipeline,
+    ref_str: str,
+    context: str,
+    step_names: set[str],
+    step_outputs: dict[str, set[str]],
+) -> None:
+    """Validate a single wiring reference against pipeline declarations.
 
-        Raises:
-            ValueError: If the reference is unresolvable — the input
-                or constant port is not declared, the target step does
-                not exist, or the target step does not declare the
-                referenced output port.
-        """
-        ref = WiringRef.parse(ref_str)
-        if ref.kind == "input":
-            if ref.port not in self.inputs:
-                msg = (
-                    f"{context}: input {ref.port!r} is not declared in pipeline inputs"
-                    f" (declared: {self.inputs})"
-                )
-                raise ValueError(msg)
-        elif ref.kind == "constant":
-            if ref.port not in self.constants:
-                msg = (
-                    f"{context}: constant {ref.port!r} is not declared"
-                    f" in pipeline constants (declared: {sorted(self.constants)})"
-                )
-                raise ValueError(msg)
-        else:
-            if ref.source not in step_names:
-                msg = f"{context}: step {ref.source!r} does not exist"
-                raise ValueError(msg)
-            if ref.port not in step_outputs[ref.source]:
-                msg = (
-                    f"{context}: step {ref.source!r} does not declare output port"
-                    f" {ref.port!r} (declared: {sorted(step_outputs[ref.source])})"
-                )
-                raise ValueError(msg)
+    For ``input`` references, confirms the port is declared in
+    ``pipeline.inputs``.  For ``constant`` references, confirms the
+    name is declared in ``pipeline.constants``.  For step references,
+    confirms the step exists and that the referenced port is in
+    the step's declared outputs.
 
-    @staticmethod
-    def _topological_sort(steps: list[StepSpec]) -> list[str]:
-        """Return step names in a valid execution order using Kahn's algorithm.
+    Args:
+        pipeline: Pipeline providing inputs and constants for validation.
+        ref_str: The raw wiring reference string (e.g.
+            ``"input.bytes"`` or ``"zstd_step.bytes"``).
+        context: A human-readable label for the reference site,
+            used in error messages (e.g.
+            ``"step 'foo' input 'bytes'"``).
+        step_names: The set of all step names defined in the pipeline.
+        step_outputs: Mapping from step name to the set of output
+            port names that step declares.
 
-        Builds an in-degree map and adjacency list from the step wiring
-        references, then processes nodes with zero in-degree iteratively
-        until all steps are ordered or a cycle is detected.
-
-        Args:
-            steps: The list of StepSpec objects to sort.  Only
-                ``"step"``-kind wiring references (i.e. inter-step
-                dependencies) are considered; ``"input"`` and
-                ``"constant"`` references do not contribute edges.
-
-        Returns:
-            A list of step names ordered so that every step appears
-            after all steps it depends on.
-
-        Raises:
-            ValueError: If the dependency graph contains a cycle,
-                listing the step names involved.
-        """
-        in_degree: dict[str, int] = {s.name: 0 for s in steps}
-        dependents: dict[str, list[str]] = defaultdict(list)
-
-        for step in steps:
-            deps: set[str] = set()
-            for ref_str in step.inputs.values():
-                ref = WiringRef.parse(ref_str)
-                if ref.kind == "step":
-                    deps.add(ref.source)
-            for dep in deps:
-                dependents[dep].append(step.name)
-                in_degree[step.name] += 1
-
-        queue: deque[str] = deque(name for name, deg in in_degree.items() if deg == 0)
-        order: list[str] = []
-
-        while queue:
-            name = queue.popleft()
-            order.append(name)
-            for dependent in dependents[name]:
-                in_degree[dependent] -= 1
-                if in_degree[dependent] == 0:
-                    queue.append(dependent)
-
-        if len(order) != len(steps):
-            remaining = [n for n in in_degree if n not in set(order)]
-            msg = f"Pipeline contains a cycle involving steps: {remaining}"
+    Raises:
+        ValueError: If the reference is unresolvable — the input
+            or constant port is not declared, the target step does
+            not exist, or the target step does not declare the
+            referenced output port.
+    """
+    ref = WiringRef.parse(ref_str)
+    if ref.kind == "input":
+        if ref.port not in pipeline.inputs:
+            msg = (
+                f"{context}: input {ref.port!r} is not declared in pipeline inputs"
+                f" (declared: {pipeline.inputs})"
+            )
+            raise ValueError(msg)
+    elif ref.kind == "constant":
+        if ref.port not in pipeline.constants:
+            msg = (
+                f"{context}: constant {ref.port!r} is not declared"
+                f" in pipeline constants (declared: {sorted(pipeline.constants)})"
+            )
+            raise ValueError(msg)
+    else:
+        if ref.source not in step_names:
+            msg = f"{context}: step {ref.source!r} does not exist"
+            raise ValueError(msg)
+        if ref.port not in step_outputs[ref.source]:
+            msg = (
+                f"{context}: step {ref.source!r} does not declare output port"
+                f" {ref.port!r} (declared: {sorted(step_outputs[ref.source])})"
+            )
             raise ValueError(msg)
 
-        return order
+
+def _topological_sort(steps: list[StepSpec]) -> list[str]:
+    """Return step names in a valid execution order using Kahn's algorithm.
+
+    Builds an in-degree map and adjacency list from the step wiring
+    references, then processes nodes with zero in-degree iteratively
+    until all steps are ordered or a cycle is detected.
+
+    Args:
+        steps: The list of StepSpec objects to sort.  Only
+            ``"step"``-kind wiring references (i.e. inter-step
+            dependencies) are considered; ``"input"`` and
+            ``"constant"`` references do not contribute edges.
+
+    Returns:
+        A list of step names ordered so that every step appears
+        after all steps it depends on.
+
+    Raises:
+        ValueError: If the dependency graph contains a cycle,
+            listing the step names involved.
+    """
+    in_degree: dict[str, int] = {s.name: 0 for s in steps}
+    dependents: dict[str, list[str]] = defaultdict(list)
+
+    for step in steps:
+        deps: set[str] = set()
+        for ref_str in step.inputs.values():
+            ref = WiringRef.parse(ref_str)
+            if ref.kind == "step":
+                deps.add(ref.source)
+        for dep in deps:
+            dependents[dep].append(step.name)
+            in_degree[step.name] += 1
+
+    queue: deque[str] = deque(name for name, deg in in_degree.items() if deg == 0)
+    order: list[str] = []
+
+    while queue:
+        name = queue.popleft()
+        order.append(name)
+        for dependent in dependents[name]:
+            in_degree[dependent] -= 1
+            if in_degree[dependent] == 0:
+                queue.append(dependent)
+
+    if len(order) != len(steps):
+        remaining = [n for n in in_degree if n not in set(order)]
+        msg = f"Pipeline contains a cycle involving steps: {remaining}"
+        raise ValueError(msg)
+
+    return order

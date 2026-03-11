@@ -70,7 +70,10 @@ def run(
     step_by_name = {s.name: s for s in pipeline.steps}
 
     # Phase 1: resolve all codec URIs to local paths.
-    wasm_paths = _resolve_uris(pipeline, step_by_name, force_download=force_download)
+    wasm_paths = {
+        name: resolve_uri(step_by_name[name].src, force_download=force_download)
+        for name in pipeline.execution_order
+    }
 
     # Phase 2: validate all signatures before any component is called.
     _validate_signatures(pipeline, step_by_name, wasm_paths, direction)
@@ -97,11 +100,10 @@ def _execute_forward(
     direction: Direction,
     engine: wasmtime.Engine,
 ) -> dict[str, bytes]:
-    """Execute pipeline steps in topological order (forward direction).
+    """Execute steps in topological order, calling the direction WIT function.
 
     Seeds value_store with constants and pipeline inputs (omitting encode_only
-    inputs when direction is ``"decode"``), then runs each step calling the
-    ``direction`` WIT function.
+    inputs when direction is ``"decode"``).
 
     Args:
         pipeline: Validated pipeline with execution_order, constants, and outputs.
@@ -132,7 +134,7 @@ def _execute_forward(
 
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
-        port_map = _build_forward_port_map(step, value_store, direction)
+        port_map = _forward_port_map(step, value_store, direction)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
@@ -153,12 +155,11 @@ def _execute_inverted(
     direction: Direction,
     engine: wasmtime.Engine,
 ) -> dict[str, bytes]:
-    """Execute pipeline steps in reversed topological order (inverted direction).
+    """Execute steps in reversed topological order, routing results backward.
 
     Seeds value_store from pipeline output wiring refs (the caller provides
     data for the "other side" of the pipeline boundary), then runs each step
-    in reverse calling the ``direction`` WIT function, routing results back
-    through input wiring refs.
+    in reverse calling the direction WIT function.
 
     Args:
         pipeline: Validated pipeline with execution_order, constants, and outputs.
@@ -187,12 +188,14 @@ def _execute_inverted(
 
     for step_name in reversed(pipeline.execution_order):
         step = step_by_name[step_name]
-        port_map = _build_inverted_port_map(step_name, step, value_store, direction)
+        port_map = _inverted_port_map(step_name, step, value_store, direction)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
         output_map = _call_component(engine, wasm_paths[step_name], direction, port_map)
-        _store_inverted_outputs(step, output_map, value_store)
+        for port_name, value in output_map:
+            if port_name in step.inputs and port_name not in step.encode_only_inputs:
+                value_store[step.inputs[port_name]] = value
 
     # Collect from pipeline inputs; encode_only ports excluded during decode.
     return {
@@ -202,7 +205,7 @@ def _execute_inverted(
     }
 
 
-def _build_forward_port_map(
+def _forward_port_map(
     step: StepSpec,
     value_store: dict[str, bytes],
     direction: Direction,
@@ -228,7 +231,7 @@ def _build_forward_port_map(
     return port_map
 
 
-def _build_inverted_port_map(
+def _inverted_port_map(
     step_name: str,
     step: StepSpec,
     value_store: dict[str, bytes],
@@ -241,8 +244,8 @@ def _build_inverted_port_map(
     parameters, e.g. compression level).
 
     Args:
-        step_name: Name of the step, used to look up its output values in
-            value_store using the ``"<step_name>.<port>"`` key convention.
+        step_name: Name of the step; used to look up output values in
+            value_store via the ``"<step_name>.<port>"`` key convention.
         step: Step whose outputs define which values to look up and whose
             encode_only_inputs are conditionally appended.
         value_store: Accumulated resolved byte values keyed by wiring ref string.
@@ -261,51 +264,6 @@ def _build_inverted_port_map(
         for port_name in step.encode_only_inputs:
             port_map.append((port_name, value_store[step.inputs[port_name]]))
     return port_map
-
-
-def _store_inverted_outputs(
-    step: StepSpec,
-    output_map: PortMap,
-    value_store: dict[str, bytes],
-) -> None:
-    """Route inverted step results back through the step's input wiring refs.
-
-    The codec's encode/decode call returns ports corresponding to the step's
-    decode-direction data inputs.  Each returned port is mapped through
-    step.inputs to store the value at the correct wiring ref key.
-    encode_only_inputs are parameters, not data outputs, so they are excluded.
-
-    Args:
-        step: Step providing the input wiring refs and encode_only_inputs set.
-        output_map: Port-map returned by the codec component call.
-        value_store: Accumulated resolved byte values; updated in place with
-            the values routed back through step.inputs wiring refs.
-    """
-    for port_name, value in output_map:
-        if port_name in step.inputs and port_name not in step.encode_only_inputs:
-            value_store[step.inputs[port_name]] = value
-
-
-def _resolve_uris(
-    pipeline: Pipeline,
-    step_by_name: dict[str, StepSpec],
-    *,
-    force_download: bool = False,
-) -> dict[str, Path]:
-    """Resolve all step codec URIs to local .wasm paths.
-
-    Args:
-        pipeline: Pipeline whose execution_order drives iteration.
-        step_by_name: Step name to StepSpec lookup.
-        force_download: Re-download even if a cached file exists.
-
-    Returns:
-        Step name to resolved local .wasm path.
-    """
-    return {
-        name: resolve_uri(step_by_name[name].src, force_download=force_download)
-        for name in pipeline.execution_order
-    }
 
 
 def _validate_signatures(
