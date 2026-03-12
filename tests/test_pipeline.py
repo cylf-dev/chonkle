@@ -38,23 +38,23 @@ class TestParseRef:
 
 
 class TestParsePipeline:
-    def test_linear_pipeline_from_fixture(self, zstd_pipeline_json: dict) -> None:
-        pipeline = Pipeline.parse(zstd_pipeline_json)
+    def test_linear_pipeline_from_fixture(self, cog_decode_pipeline_json: dict) -> None:
+        pipeline = Pipeline.parse(cog_decode_pipeline_json)
         assert isinstance(pipeline, Pipeline)
-        assert pipeline.direction == "encode"
+        assert pipeline.direction == "decode"
         assert list(pipeline.inputs.keys()) == ["bytes"]
-        assert len(pipeline.steps) == 1
-        assert pipeline.steps[0].name == "zstd"
-        assert pipeline.steps[0].codec_id == "zstd"
-        assert pipeline.execution_order == ["zstd"]
+        assert len(pipeline.steps) == 2
+        assert pipeline.steps[0].name == "zlib"
+        assert pipeline.steps[1].name == "predictor2"
+        assert pipeline.execution_order == ["zlib", "predictor2"]
 
-    def test_linear_pipeline_codec_id(self, zstd_pipeline_json: dict) -> None:
-        pipeline = Pipeline.parse(zstd_pipeline_json)
-        assert pipeline.codec_id == "zstd-linear"
+    def test_linear_pipeline_codec_id(self, cog_decode_pipeline_json: dict) -> None:
+        pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        assert pipeline.codec_id == "cog-zlib-predictor2"
 
-    def test_linear_pipeline_step_fields(self, zstd_pipeline_json: dict) -> None:
-        pipeline = Pipeline.parse(zstd_pipeline_json)
-        step = pipeline.steps[0]
+    def test_linear_pipeline_step_fields(self, cog_decode_pipeline_json: dict) -> None:
+        pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        step = pipeline.steps[0]  # zlib step
         assert step.src.startswith("file://")
         assert step.inputs == {"bytes": "input.bytes", "level": "constant.level"}
         assert step.outputs == ["bytes"]

@@ -1,0 +1,35 @@
+{
+  "codec_id": "cog-zlib-predictor2",
+  "direction": "decode",
+  "inputs": {"bytes": {"type": "bytes"}},
+  "constants": {
+    "bytes_per_sample": {"type": "int", "value": 2},
+    "width":            {"type": "int", "value": 1024},
+    "level":            {"type": "int", "value": 9}
+  },
+  "outputs": {"bytes": "predictor2.bytes"},
+  "steps": [
+    {
+      "name": "zlib",
+      "codec_id": "zlib",
+      "src": "file:///path/to/codec/zlib-rs/zlib.wasm",
+      "inputs": {
+        "bytes": "input.bytes",
+        "level": "constant.level"
+      },
+      "outputs": ["bytes"],
+      "encode_only_inputs": ["level"]
+    },
+    {
+      "name": "predictor2",
+      "codec_id": "tiff-predictor-2",
+      "src": "file:///path/to/codec/tiff-predictor-2-c/tiff-predictor-2.wasm",
+      "inputs": {
+        "bytes":            "zlib.bytes",
+        "bytes_per_sample": "constant.bytes_per_sample",
+        "width":            "constant.width"
+      },
+      "outputs": ["bytes"]
+    }
+  ]
+}

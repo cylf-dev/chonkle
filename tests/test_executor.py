@@ -9,11 +9,24 @@ import pytest
 from chonkle.executor import run
 from chonkle.pipeline import Pipeline
 
+_REPO_ROOT = Path(__file__).parent.parent
+_CODEC_DIR = _REPO_ROOT / "codec"
+
 # Tests below this marker require compiled codec .wasm files.
 # They will not pass until the codecs are built in a separate session.
 CODEC_REQUIRED = pytest.mark.skipif(
     True,
     reason="requires compiled codec .wasm files (built in a separate session)",
+)
+
+_COG_WASM_ZLIB = _CODEC_DIR / "zlib-rs" / "zlib.wasm"
+_COG_WASM_PREDICTOR2 = _CODEC_DIR / "tiff-predictor-2-c" / "tiff-predictor-2.wasm"
+COG_CODECS_REQUIRED = pytest.mark.skipif(
+    not (_COG_WASM_ZLIB.exists() and _COG_WASM_PREDICTOR2.exists()),
+    reason=(
+        "COG codec .wasm files not present"
+        " — build codec/zlib-rs and codec/tiff-predictor-2-c first"
+    ),
 )
 
 
@@ -24,11 +37,11 @@ def _make_simple_pipeline(src: str = "file:///fake.wasm") -> dict:
         "direction": "encode",
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {"level": {"type": "int", "value": 3}},
-        "outputs": {"bytes": "zstd.bytes"},
+        "outputs": {"bytes": "codec.bytes"},
         "steps": [
             {
-                "name": "zstd",
-                "codec_id": "zstd",
+                "name": "codec",
+                "codec_id": "codec",
                 "src": src,
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                 "outputs": ["bytes"],
@@ -45,11 +58,11 @@ def _make_decode_pipeline(src: str = "file:///fake.wasm") -> dict:
         "direction": "decode",
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {"level": {"type": "int", "value": 3}},
-        "outputs": {"bytes": "zstd.bytes"},
+        "outputs": {"bytes": "codec.bytes"},
         "steps": [
             {
-                "name": "zstd",
-                "codec_id": "zstd",
+                "name": "codec",
+                "codec_id": "codec",
                 "src": src,
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                 "outputs": ["bytes"],
@@ -1218,107 +1231,6 @@ class TestInvertedExecution:
         assert "bytes" in port_names
 
 
-# Tests below require actual compiled codec .wasm files.
-# They will not pass until the codecs are built.
-
-
-@CODEC_REQUIRED
-class TestZstdRoundtrip:
-    def test_encode_produces_bytes(
-        self, raw_chunk: bytes, zstd_pipeline_json: dict
-    ) -> None:
-        """zstd encode pipeline runs without error and returns bytes."""
-        pipeline = Pipeline.parse(zstd_pipeline_json)
-        result = run(pipeline, {"bytes": raw_chunk}, pipeline.direction)
-        assert isinstance(result["bytes"], bytes)
-        assert len(result["bytes"]) > 0
-
-    def test_encode_decode_roundtrip(self, raw_chunk: bytes) -> None:
-        """zstd encode followed by decode returns the original bytes."""
-        wasm_src = (
-            "file:///path/to/codecs/zstd-rs/target/wasm32-wasip2/release/zstd_rs.wasm"
-        )
-        encode_pipeline = Pipeline.parse(
-            {
-                "codec_id": "zstd-encode",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {"level": {"type": "int", "value": 3}},
-                "outputs": {"bytes": "zstd.bytes"},
-                "steps": [
-                    {
-                        "name": "zstd",
-                        "codec_id": "zstd",
-                        "src": wasm_src,
-                        "inputs": {"bytes": "input.bytes", "level": "constant.level"},
-                        "outputs": ["bytes"],
-                        "encode_only_inputs": ["level"],
-                    }
-                ],
-            }
-        )
-        decode_pipeline = Pipeline.parse(
-            {
-                "codec_id": "zstd-decode",
-                "direction": "decode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "zstd.bytes"},
-                "steps": [
-                    {
-                        "name": "zstd",
-                        "codec_id": "zstd",
-                        "src": wasm_src,
-                        "inputs": {"bytes": "input.bytes"},
-                        "outputs": ["bytes"],
-                    }
-                ],
-            }
-        )
-
-        encoded = run(encode_pipeline, {"bytes": raw_chunk}, encode_pipeline.direction)
-        decoded = run(
-            decode_pipeline, {"bytes": encoded["bytes"]}, decode_pipeline.direction
-        )
-        assert decoded["bytes"] == raw_chunk
-
-
-@CODEC_REQUIRED
-class TestZstdInvertedRoundtrip:
-    def test_encode_decode_via_single_pipeline_inversion(
-        self, raw_chunk: bytes
-    ) -> None:
-        """Decode-declared pipeline: inverted encode then forward decode round-trips."""
-        wasm_src = (
-            "file:///path/to/codecs/zstd-rs/target/wasm32-wasip2/release/zstd_rs.wasm"
-        )
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "zstd-decode",
-                "direction": "decode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {"level": {"type": "int", "value": 3}},
-                "outputs": {"bytes": "zstd.bytes"},
-                "steps": [
-                    {
-                        "name": "zstd",
-                        "codec_id": "zstd",
-                        "src": wasm_src,
-                        "inputs": {"bytes": "input.bytes", "level": "constant.level"},
-                        "outputs": ["bytes"],
-                        "encode_only_inputs": ["level"],
-                    }
-                ],
-            }
-        )
-        # Encode using inversion (pipeline declared decode, run as encode)
-        encoded = run(pipeline, {"bytes": raw_chunk}, "encode")
-        assert isinstance(encoded["bytes"], bytes)
-        # Decode using forward direction
-        decoded = run(pipeline, {"bytes": encoded["bytes"]}, "decode")
-        assert decoded["bytes"] == raw_chunk
-
-
 @CODEC_REQUIRED
 class TestPageSplitFanOut:
     def test_fan_out_produces_three_outputs(
@@ -1357,3 +1269,105 @@ class TestPageSplitFanOut:
         assert len(result["rep_levels"]) == rep_length
         assert len(result["def_levels"]) == def_length
         assert len(result["data"]) == len(data) - rep_length - def_length
+
+
+@COG_CODECS_REQUIRED
+class TestCogChunkPipeline:
+    """Round-trip and decode tests for the COG zlib+tiff-predictor-2 pipeline."""
+
+    _TILE_BYTES = 1024 * 1024 * 2  # 1024x1024 uint16
+
+    def test_decode_declared_forward_decode_output_size(
+        self, cog_chunk: bytes, cog_decode_pipeline_json: dict
+    ) -> None:
+        """Decode-declared pipeline forward decode: output is 1024x1024x2 bytes."""
+        pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        assert len(result["bytes"]) == self._TILE_BYTES
+
+    def test_decode_declared_forward_decode_output_is_bytes(
+        self, cog_chunk: bytes, cog_decode_pipeline_json: dict
+    ) -> None:
+        """Decode-declared pipeline running forward decode returns a bytes object."""
+        pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        assert isinstance(result["bytes"], bytes)
+
+    def test_encode_declared_inverted_decode_output_size(
+        self, cog_chunk: bytes, cog_encode_pipeline_json: dict
+    ) -> None:
+        """Encode-declared pipeline inverted decode: output is 1024x1024x2 bytes."""
+        pipeline = Pipeline.parse(cog_encode_pipeline_json)
+        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        assert len(result["bytes"]) == self._TILE_BYTES
+
+    def test_encode_declared_inverted_decode_output_is_bytes(
+        self, cog_chunk: bytes, cog_encode_pipeline_json: dict
+    ) -> None:
+        """Encode-declared pipeline running inverted decode returns a bytes object."""
+        pipeline = Pipeline.parse(cog_encode_pipeline_json)
+        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        assert isinstance(result["bytes"], bytes)
+
+    def test_decode_declared_pipeline_roundtrip(
+        self, raw_chunk: bytes, cog_decode_pipeline_json: dict
+    ) -> None:
+        """Decode-declared pipeline roundtrip: inverted encode then forward decode.
+
+        raw_chunk is padded to 1024x1024x2 bytes so tiff-predictor-2 can
+        interpret it as a full tile (width=1024, bytes_per_sample=2).
+        """
+        tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
+            : self._TILE_BYTES
+        ]
+        pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        encoded = run(pipeline, {"bytes": tile}, "encode")
+        decoded = run(pipeline, {"bytes": encoded["bytes"]}, "decode")
+        assert decoded["bytes"] == tile
+
+    def test_encode_declared_pipeline_roundtrip(
+        self, raw_chunk: bytes, cog_encode_pipeline_json: dict
+    ) -> None:
+        """Encode-declared pipeline roundtrip: forward encode then inverted decode.
+
+        raw_chunk is padded to 1024x1024x2 bytes so tiff-predictor-2 can
+        interpret it as a full tile (width=1024, bytes_per_sample=2).
+        """
+        tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
+            : self._TILE_BYTES
+        ]
+        pipeline = Pipeline.parse(cog_encode_pipeline_json)
+        encoded = run(pipeline, {"bytes": tile}, "encode")
+        decoded = run(pipeline, {"bytes": encoded["bytes"]}, "decode")
+        assert decoded["bytes"] == tile
+
+    def test_encode_declared_inverted_decode_matches_decode_declared_forward(
+        self,
+        cog_chunk: bytes,
+        cog_decode_pipeline_json: dict,
+        cog_encode_pipeline_json: dict,
+    ) -> None:
+        """Encode-declared pipeline inverted decode yields the same raw tile
+        as decode-declared pipeline forward decode."""
+        decode_pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        encode_pipeline = Pipeline.parse(cog_encode_pipeline_json)
+        forward = run(decode_pipeline, {"bytes": cog_chunk}, "decode")
+        inverted = run(encode_pipeline, {"bytes": cog_chunk}, "decode")
+        assert inverted["bytes"] == forward["bytes"]
+
+    def test_decode_declared_inverted_encode_matches_encode_declared_forward(
+        self,
+        raw_chunk: bytes,
+        cog_decode_pipeline_json: dict,
+        cog_encode_pipeline_json: dict,
+    ) -> None:
+        """Decode-declared pipeline inverted encode yields the same compressed bytes
+        as encode-declared pipeline forward encode."""
+        tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
+            : self._TILE_BYTES
+        ]
+        decode_pipeline = Pipeline.parse(cog_decode_pipeline_json)
+        encode_pipeline = Pipeline.parse(cog_encode_pipeline_json)
+        inverted = run(decode_pipeline, {"bytes": tile}, "encode")
+        forward = run(encode_pipeline, {"bytes": tile}, "encode")
+        assert inverted["bytes"] == forward["bytes"]

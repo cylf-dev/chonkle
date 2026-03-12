@@ -240,14 +240,15 @@ def _inverted_port_map(
     """Build the port-map for a step in inverted execution.
 
     The step's forward-direction outputs become its inverted-direction inputs.
-    encode_only_inputs are appended when calling encode (they are codec
-    parameters, e.g. compression level).
+    Inputs wired from constants (non-encode_only) are always included — they
+    are configuration parameters the codec needs in both directions.
+    encode_only_inputs are appended only when calling encode.
 
     Args:
         step_name: Name of the step; used to look up output values in
             value_store via the ``"<step_name>.<port>"`` key convention.
         step: Step whose outputs define which values to look up and whose
-            encode_only_inputs are conditionally appended.
+            inputs supply constant-wired parameters and encode_only_inputs.
         value_store: Accumulated resolved byte values keyed by wiring ref string.
         direction: Runtime execution direction; encode_only_inputs are appended
             only when this is ``"encode"``.
@@ -260,6 +261,9 @@ def _inverted_port_map(
         val = value_store.get(f"{step_name}.{port_name}")
         if val is not None:
             port_map.append((port_name, val))
+    for port_name, ref_str in step.inputs.items():
+        if ref_str.startswith("constant.") and port_name not in step.encode_only_inputs:
+            port_map.append((port_name, value_store[ref_str]))
     if direction == "encode":
         for port_name in step.encode_only_inputs:
             port_map.append((port_name, value_store[step.inputs[port_name]]))

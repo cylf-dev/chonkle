@@ -7,6 +7,10 @@ import pytest
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 PIPELINES_DIR = FIXTURES_DIR / "pipelines"
+CHUNKS_DIR = FIXTURES_DIR / "chunks"
+
+REPO_ROOT = Path(__file__).parent.parent
+CODEC_DIR = REPO_ROOT / "codec"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -31,7 +35,7 @@ def pytest_collection_modifyitems(
 
 @pytest.fixture
 def raw_chunk() -> bytes:
-    """Raw bytes of known content suitable for zstd round-trip testing.
+    """Raw bytes of known content suitable for codec round-trip testing.
 
     Patterned bytes compress and decompress deterministically.
     """
@@ -52,10 +56,50 @@ def page_split_input() -> tuple[bytes, int, int]:
 
 
 @pytest.fixture
-def zstd_pipeline_json() -> dict:
-    """Parsed pipeline JSON for the zstd-linear fixture."""
-    with (PIPELINES_DIR / "zstd-linear.json").open() as f:
-        return json.load(f)
+def cog_chunk() -> bytes:
+    """A real COG tile compressed with zlib (level 9) + tiff-predictor-2.
+
+    1024x1024 uint16 Sentinel-2 band tile. Decodes to 2,097,152 bytes.
+    """
+    return (CHUNKS_DIR / "cog-chunk-0").read_bytes()
+
+
+@pytest.fixture
+def cog_decode_pipeline_json() -> dict:
+    """Pipeline dict for the COG zlib+tiff-predictor-2 decode chain.
+
+    Uses real file:// URIs pointing to the built codec .wasm files.
+    """
+    with (PIPELINES_DIR / "cog-decode-pipeline.json").open() as f:
+        pipeline = json.load(f)
+    step_srcs = {
+        "zlib": f"file://{CODEC_DIR / 'zlib-rs' / 'zlib.wasm'}",
+        "predictor2": (
+            f"file://{CODEC_DIR / 'tiff-predictor-2-c' / 'tiff-predictor-2.wasm'}"
+        ),
+    }
+    for step in pipeline["steps"]:
+        step["src"] = step_srcs[step["name"]]
+    return pipeline
+
+
+@pytest.fixture
+def cog_encode_pipeline_json() -> dict:
+    """Pipeline dict for the COG tiff-predictor-2+zlib encode chain.
+
+    Uses real file:// URIs pointing to the built codec .wasm files.
+    """
+    with (PIPELINES_DIR / "cog-encode-pipeline.json").open() as f:
+        pipeline = json.load(f)
+    step_srcs = {
+        "predictor2": (
+            f"file://{CODEC_DIR / 'tiff-predictor-2-c' / 'tiff-predictor-2.wasm'}"
+        ),
+        "zlib": f"file://{CODEC_DIR / 'zlib-rs' / 'zlib.wasm'}",
+    }
+    for step in pipeline["steps"]:
+        step["src"] = step_srcs[step["name"]]
+    return pipeline
 
 
 @pytest.fixture
