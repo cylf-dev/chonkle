@@ -4,6 +4,20 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **COG chunk pipeline and tests**: added `codec/zlib-rs/` (Rust zlib codec via
+  `cargo-component`, `flate2` rust_backend). Added `tests/fixtures/chunks/cog-chunk-0`
+  (real 1024x1024 uint16 Sentinel-2 tile). Replaced `tests/fixtures/pipelines/zstd-linear.json`
+  with `cog-zlib-predictor2.json` (two-step decode: zlib → tiff-predictor-2). Replaced
+  `zstd_pipeline_json` fixture in conftest with `cog_chunk` + `cog_pipeline_json` fixtures
+  (with real `file://` URIs). Added `TestCogChunkPipeline` in `test_executor.py` with three
+  tests (decode size, decode type, encode/decode roundtrip via DAG inversion) gated on
+  `COG_CODECS_REQUIRED` (checks file existence). Updated `TestParsePipeline` fixture refs.
+
+- **`_inverted_port_map` fix**: inverted execution now includes constant-wired non-encode_only
+  inputs in the port map. Previously, codecs with required configuration parameters wired from
+  constants (e.g. tiff-predictor-2's `bytes_per_sample`, `width`) would receive an empty
+  port-map in the inverted direction, causing a missing-port error.
+
 - **Module-level function idiom applied**: in `executor.py`, inlined
   `_resolve_uris` and `_store_inverted_outputs` (single-caller helpers) and
   dropped the redundant `_build_` prefix from the port-map builders. In

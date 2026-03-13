@@ -5,7 +5,7 @@ an *implementation* — it describes the DAG, the wiring, and the baked-in
 constants. It is not a codec signature, and its schema is not the same as a
 signature's.
 
-A pipeline is conceptually a codec: a codec signature for the pipeline can be
+However, a pipeline is conceptually a codec: a codec signature for the pipeline can be
 derived from the pipeline JSON. The input names and types come directly from the
 `inputs` field, and the output types can be inferred by tracing each output
 wiring reference back through the step signatures.

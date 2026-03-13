@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -482,18 +483,24 @@ def _call_component(
         RuntimeError: The component does not export the expected function,
             or the component returns an Err result.
     """
+    t0 = time.perf_counter()
     component = wasmtime.component.Component.from_file(engine, str(wasm_path))
+    t1 = time.perf_counter()
 
     store = wasmtime.Store(engine)
     store.set_wasi(wasmtime.WasiConfig())
     linker = wasmtime.component.Linker(engine)
     linker.add_wasip2()
+    t2 = time.perf_counter()
 
     instance = linker.instantiate(store, component)
+    t3 = time.perf_counter()
     fn = _get_function(instance, store, engine, component.type, direction, wasm_path)
 
     result = fn(store, port_map)
+    t4 = time.perf_counter()
     fn.post_return(store)
+    t5 = time.perf_counter()
 
     # wasmtime returns the Err string directly for a result<T, E> error variant.
     if isinstance(result, str):
@@ -501,7 +508,19 @@ def _call_component(
         raise RuntimeError(msg)
 
     # Normalize to list[tuple[str, bytes]] in case wasmtime returns lists.
-    return [(str(name), bytes(data)) for name, data in result]
+    normalized = [(str(name), bytes(data)) for name, data in result]
+    t6 = time.perf_counter()
+
+    sample_type = type(result[0][1]).__name__ if result else "n/a"
+    log.warning(
+        "[TIMING] %s %s: from_file=%.3fs store+linker=%.3fs"
+        " instantiate=%.3fs fn=%.3fs post_return=%.3fs normalize=%.3fs"
+        " total=%.3fs  result[0][1] type=%s",
+        wasm_path.name, direction,
+        t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4, t6 - t5,
+        t6 - t0, sample_type,
+    )
+    return normalized
 
 
 def _get_function(

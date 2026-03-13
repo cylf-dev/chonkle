@@ -1,23 +1,20 @@
-# chonkle — DAG codec pipeline
+# chonkle
 
-A next-generation codec pipeline executor for chunked array and columnar data
-formats (Zarr, COG, Parquet, ORC, Arrow). Built on the
+Chonkle is a codec pipeline executor for chunked array and columnar data
+formats (e.g., Zarr, COG, Parquet, ORC, Arrow). Built on the
 [WebAssembly Component Model](https://component-model.bytecodealliance.org/)
 and executed by a Python orchestrator backed by
 [Wasmtime](https://wasmtime.dev/).
 
-This branch is a direct successor to the original chonkle proof of concept,
-which demonstrated that WebAssembly is a viable codec delivery mechanism for
-chunked array formats. That proof of concept mixed Python (numcodecs) and Wasm
-codecs in a simple linear pipeline. This branch takes the next step: all codecs
-are Wasm components, pipelines are directed acyclic graphs (DAGs), and the
-interface contract is machine-verifiable via WIT.
-
----
+This realization of chonkle is the successor to an earlier proof of concept, which
+demonstrated that WebAssembly is a viable codec delivery mechanism for chunked array
+formats. That proof of concept mixed Python (numcodecs) and Wasm codecs in a simple
+linear pipeline. In this version, all codecs are Wasm components, pipelines are directed
+acyclic graphs (DAGs), and the interface contract is machine-verifiable.
 
 ## What chonkle established
 
-chonkle showed that:
+The original version of chonkle showed that:
 
 - Wasm codecs can be fetched remotely, cached locally, and executed in a
   sandboxed runtime
@@ -26,11 +23,9 @@ chonkle showed that:
   toolchains
 - Python and Wasm codecs can be freely mixed in a pipeline
 
-What chonkle did not address: pipelines where codec steps have multiple inputs
-or outputs (fan-in / fan-out), and the data copy overhead of moving chunk data
-between steps via Python.
-
----
+What the first version of chonkle did not address: pipelines where codec steps have
+multiple inputs or outputs (fan-in / fan-out), and the data copy overhead of moving
+chunk data between steps via Python.
 
 ## Why the Component Model
 
@@ -41,14 +36,14 @@ decoded independently. That is a 1-to-3 fan-out. Dictionary-encoded columns
 require two inputs to a single codec step — the encoded indices and a
 separately-stored dictionary page. That is a 2-to-1 fan-in.
 
-Modeling these pipelines correctly requires named, typed ports — not just
-`bytes in, bytes out`. The WebAssembly Component Model provides this through
-WIT (WebAssembly Interface Types): every codec component must export `encode`
-and `decode` functions that accept a named port map and a configuration blob.
-Wasmtime verifies the contract at instantiation time, rejecting a component
-with wrong signatures immediately. The specific ports a codec expects inside
-the port map are declared in a JSON signature sidecar and validated by the
-orchestrator before any component is called.
+Modeling these pipelines correctly requires named, typed ports — not just `bytes in,
+bytes out`. The WebAssembly Component Model provides this through WIT (WebAssembly
+Interface Types): every codec component must export `encode` and `decode` functions that
+accept a named port map. Configuration is passed as ports, the same way data is.
+Wasmtime verifies the contract at instantiation time, rejecting a component with wrong
+signatures immediately. The specific ports a codec expects inside the port map are
+declared in a JSON signature sidecar and validated by the orchestrator before any
+component is called.
 
 The Component Model also makes this practical at ecosystem scale. Any language
 with a Component Model toolchain — Rust, C, Python via componentize-py, and
@@ -63,56 +58,39 @@ convention — could support fan-in/fan-out in principle, but would require
 every codec author to implement a shared protocol with no tooling support and
 no interface verification. The Component Model removes that burden.
 
----
-
 ## Data copies: current approach vs. original chonkle
 
-One of the original motivations for moving all codecs to Wasm was reducing the
-number of times chunk data is copied as it passes through a pipeline. The
-following is a per-step accounting of data copies for each approach.
+The following is a per-step accounting of non-algorithmic data copies — copies
+that occur in the plumbing between codec steps, outside the codec algorithms
+themselves.
 
-### chonkle (hybrid Python + Wasm, linear pipeline)
+### Copy counts by edge type
 
-When two consecutive Wasm codec steps execute in chonkle, the data path is:
+| Edge type | Copies per inter-step edge |
+| --- | --- |
+| numcodecs → numcodecs | 0 (Python passes object reference; codec B reads directly from codec A's output buffer) |
+| numcodecs → Wasm | 1 (Wasmtime writes Python bytes into Wasm linear memory) |
+| Wasm → numcodecs | 1 (Python reads Wasm linear memory into a Python `bytes` object) |
+| Wasm → Wasm (v1, core modules) | 2 (read from linear memory into Python bytes; write Python bytes into next linear memory) |
+| Wasm → Wasm (v2, Component Model) | 1 (Wasmtime canonical ABI copies between linear memories, never touching Python's heap) |
 
-1. Wasm codec A writes its output into its own linear memory.
-2. **Python reads that output into a Python `bytes` object** — a heap
-   allocation in Python's memory. *(Copy 1)*
-3. Python passes the `bytes` object into the next Wasm codec call.
-4. **Wasmtime writes it into codec B's linear memory.** *(Copy 2)*
+### What this means for chonkle v2
 
-Two copies per inter-codec edge, with Python's object model and allocator
-involved at each crossing.
+Moving all codecs to Wasm eliminates the two-copy penalty that occurred at
+every Wasm→Wasm edge in v1, reducing it to one copy. It does not reduce copies
+below the numcodecs baseline — consecutive numcodecs steps pass data by
+reference with zero non-algorithmic copies. The move to all-Wasm still entails a
+copy overhead relative to all-numcodecs, not a reduction.
 
-### This branch (Component Model, Python orchestrator)
-
-When two consecutive Wasm component steps execute here, the data path is:
-
-1. Component A writes its output into its own linear memory.
-2. **Wasmtime's canonical ABI copies it directly into component B's linear
-   memory** — entirely within Wasmtime's native memory management, never
-   touching Python's heap. *(Copy 1)*
-
-One copy per inter-codec edge. Python's role between steps is to hold a
-reference and route it to the next component call — bookkeeping, not data
-movement.
-
-### Why this matters
-
-The copy that remains is a `memcpy`-class operation inside Wasmtime, running
-at memory bandwidth speeds in native code, with no Python object allocation,
-no reference counting, and no GIL involvement. The data involved is likely
-still warm in CPU cache from the codec that just wrote it.
-
-This is not zero-copy. Eliminating the remaining copy would require moving the
-orchestrator itself into Wasm — which is architecturally possible but not
-practical today, as dynamic component linking in the Component Model is still
-maturing. The Python orchestrator is an explicit design decision: it keeps the
-executor flexible and iterable, and the single-copy cost is acceptable for the
-chunk sizes (KB to low MB) typical in chunked array formats, where codec
-execution time is expected to dominate over data movement time.
-
----
+The copy that v2 retains is a `memcpy`-class operation inside Wasmtime, running at
+memory bandwidth speeds in native code, with no Python object allocation, no reference
+counting, and no GIL involvement. Regardless, this is still not zero-copy. Eliminating
+the remaining copy would require moving the orchestrator itself into Wasm — which is
+architecturally possible but not practical today, as dynamic component linking in the
+Component Model is still maturing. The Python orchestrator is an explicit design
+decision: it keeps the executor flexible and iterable. The single-copy cost is the price
+of the sandboxing, language-agnostic authoring, and verifiable interface contract that
+the Component Model provides.
 
 ## Architecture overview
 
@@ -157,13 +135,13 @@ and drives the Wasmtime execution loop — calling each component's `encode` or
 `decode` function in order and routing the named port outputs to the
 appropriate next step inputs.
 
----
-
 ## Pipeline JSON
 
 A pipeline is a directed acyclic graph of codec steps. Each step names a codec
 component (by URI) and wires its inputs to pipeline inputs, constants, or
 outputs of previous steps.
+
+### Schema
 
 ```json
 {
@@ -239,11 +217,6 @@ outputs of previous steps.
 }
 ```
 
-> **Note:** This example illustrates a realistic Parquet decode pipeline using
-> hypothetical codecs (`rle-parquet.wasm`). The actual fixture in
-> `tests/fixtures/pipelines/page-split-dag.json` uses the `identity` codec for
-> the downstream steps, since `rle-parquet` is not built in this PoC.
-
 Each step declares both its `inputs` (wiring references) and its `outputs`
 (port names). Technically, the orchestrator could derive output port names
 entirely from each codec's signature, making `outputs` in the pipeline JSON
@@ -252,44 +225,14 @@ and verifiable by a human without cross-referencing external signatures.
 The orchestrator validates the declared `outputs` against the codec signature
 at parse time — a mismatch is an error.
 
----
+### Relationship to the codec inventory
 
-## Format drivers and the executor boundary
-
-This executor is format-agnostic. It accepts a pipeline DAG and chunk data,
-runs the codecs in order, and returns the result. It has no knowledge of
-Zarr, Parquet, COG, ORC, or any other file format.
-
-A **format driver** is the layer above the executor that bridges a specific
-file format and this executor. Its responsibilities are:
-
-- Read format-specific metadata (Zarr `.zarray`, Parquet page headers, TIFF
-  IFDs, etc.) and translate it into a pipeline DAG JSON that this executor
-  can run
-- Supply pipeline inputs that come from file metadata rather than chunk data
-  — for example, `rep_length` and `def_length` from a Parquet page header,
-  or `element_size` from a Zarr array descriptor
-- Manage chunk I/O — fetching raw chunk bytes from storage and passing them
-  to the executor, then storing the results
-
-Format drivers are outside the scope of this repository. The pipeline JSON
-examples here are written as a format driver would produce them, not as
-something a user would typically author by hand. In production use, pipelines
-would be generated programmatically from file metadata, not hand-rolled.
-
----
-
-## Relationship to the codec inventory
-
-This branch is designed to align with the codec signature and pipeline
+The schema is designed to align with the codec signature and pipeline
 model defined in
 [protospec/codec-inventory.md](https://github.com/cylf-dev/protospec/blob/main/codec-inventory.md).
 The wiring syntax (`input.<name>`, `<step>.<output>`, `constant.<name>`),
 the typed port model, and the distinction between `encode_only` and
-bidirectional inputs all follow the inventory's definitions.
-
-The full divergence log lives in [docs/PIPELINE_SCHEMA.md](docs/PIPELINE_SCHEMA.md).
-A summary:
+bidirectional inputs all follow the inventory's definitions. However, a number of divergences exist between the protospec and the pipeline schema shown above:
 
 - **`steps` is an array, not an object.** JSON objects have no guaranteed key
   order across parsers. An array makes execution order explicit. The step name
@@ -314,13 +257,34 @@ A summary:
   in the codec signature. Surfacing it on the step keeps the pipeline
   self-contained for routing at parse time, before signatures are loaded.
 
----
+The full divergence log lives in [docs/PIPELINE_SCHEMA.md](docs/PIPELINE_SCHEMA.md).
+
+## Format drivers and the executor boundary
+
+This executor is format-agnostic. It accepts a pipeline DAG and chunk data,
+runs the codecs in order, and returns the result. It has no knowledge of
+Zarr, Parquet, COG, ORC, or any other file format.
+
+A **format driver** is the layer above the executor that bridges a specific
+file format and this executor. Its responsibilities are:
+
+- Read format-specific metadata (Zarr `.zarray`, Parquet page headers, TIFF
+  IFDs, etc.) and translate it into a pipeline DAG JSON that this executor
+  can run
+- Supply pipeline inputs that come from file metadata rather than chunk data
+  — for example, `rep_length` and `def_length` from a Parquet page header,
+  or `element_size` from a Zarr array descriptor
+- Manage chunk I/O — fetching raw chunk bytes from storage and passing them
+  to the executor, then storing the results
+
+Format drivers are outside the scope of this repository. The pipeline JSON
+examples here are written as a format driver would produce them, not as
+something a user would typically author by hand. In production use, pipelines
+would be generated programmatically from file metadata, not hand-rolled.
 
 ## Status
 
 Proof of concept. Not production ready.
-
----
 
 ## Acknowledgements
 

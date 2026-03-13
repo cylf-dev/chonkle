@@ -6,16 +6,25 @@
   `chonkle:codec@0.1.0`, world `codec`, interface `transform` with `encode`
   and `decode` functions
 
-## Codecs — `codecs/`
+## Codecs — `codec/`
 
-Not yet built (separate session). Planned:
+Each codec directory contains a `.wasm` binary, a `.signature.json` sidecar,
+and its build source.
 
-- **zstd-rs/** — zstd encode/decode, Rust, 1-in/1-out (`bytes`)
+### Built
+
+- **tiff-predictor-2-c/** — TIFF horizontal differencing, C + Zig build,
+  ports: `bytes` + `bytes_per_sample` + `width` in, `bytes` out
+- **zlib-rs/** — zlib compress/decompress, Rust (`cargo-component`), ports:
+  `bytes` in (+ optional `level` encode-only), `bytes` out.
+  Build: `cargo component build --release` in `codec/zlib-rs/`.
+  Output copied to `codec/zlib-rs/zlib.wasm`.
+
+### Planned
+
+- **zstd-rs/** — zstd encode/decode, Rust
 - **page-split-rs/** — byte-range splitter, Rust, fan-out (1 input, 3 outputs)
 - **identity-py/** — passthrough codec, Python via componentize-py
-
-Each codec will have a `.wasm` binary and a `.signature.json` sidecar declaring
-its input and output port names.
 
 ## Source — `src/chonkle/`
 
@@ -26,10 +35,10 @@ Core library. All public API is re-exported from `__init__.py`.
   references, and produces a topologically sorted `execution_order`.
   Key types: `Pipeline`, `StepSpec`, `WiringRef`.
 - **executor.py** — DAG execution via Wasmtime Component Model. Entry point:
-  `run(pipeline, inputs)`. Resolves codec URIs, validates signature sidecars,
-  builds port-maps, calls each step's Wasm component in order.
+  `run(pipeline, inputs, direction)`. Resolves codec URIs, validates signature
+  sidecars, builds port-maps, calls each step's Wasm component in order.
 - **wasm_download.py** — codec URI resolution and fetch cache. `resolve_uri()`
-  handles `file://` and `https://`. `download_https()` and `download_oci()`
+  handles `file://`, `https://`, and `oci://`. `download_https()` and `download_oci()`
   store downloaded `.wasm` files locally keyed by SHA-256 or OCI reference.
   Respects `CHONKLE_CACHE_DIR` and `CHONKLE_FORCE_DOWNLOAD` env vars.
 - **cli.py** — `chonkle run` command. Accepts `--pipeline`, `--input NAME=FILE`,
@@ -63,7 +72,10 @@ Pipeline JSON files for testing and demonstration:
 ## Docs — `docs/`
 
 - **wasm/** — general Wasm knowledge base (not project-specific):
-  - **OVERVIEW.md**, **WASI.md**, **MEMORY.md**, **WIT.md**
+  - **OVERVIEW.md**, **WASI.md**, **MEMORY.md**, **WIT.md**, **COMPONENT_MODEL.md**
+- **decisions/** — architectural decision records:
+  - **DISTRIBUTION.md** — remote storage options for `.wasm` files
+  - **COPY_ELIMINATION.md** — analysis of approaches to avoid data copies through Wasm boundary
 
 ## Docs — `docs/ai/`
 

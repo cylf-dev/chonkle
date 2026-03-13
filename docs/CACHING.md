@@ -16,7 +16,7 @@ There is no eviction, TTL, or size management. However, Wasm modules are small (
 
 ## wasmtime compiled-code disk cache
 
-Every call to `_wasm_call` in `wasm_runner.py` creates a `wasmtime.Engine` and compiles the `.wasm` file to native machine code — via `Module.from_file()` on the Core path or `Component.from_file()` on the Component path. This compilation is the most expensive per-call overhead in the Wasm path.
+Every codec call in `executor.py` creates a `wasmtime.Engine` and compiles the `.wasm` file to native machine code — via `Module.from_file()` on the Core path or `Component.from_file()` on the Component path. This compilation is the most expensive per-call overhead in the Wasm path.
 
 To avoid this repeated compilation, the Engine is configured with wasmtime's built-in compiled-code cache (`config.cache = True`). wasmtime transparently stores compiled native code on disk. When `Module.from_file()` or `Component.from_file()` is called for a `.wasm` file that has already been compiled with the same wasmtime version, the cached native code is loaded instead of recompiling.
 
@@ -24,11 +24,16 @@ This is separate from the download cache above: the download cache stores `.wasm
 
 wasmtime manages the cache location and eviction automatically (`~/.cache` on Linux, `~/Library/Caches` on macOS). The cache invalidates automatically when the wasmtime version changes.
 
-## Warm-container deployments
+## In-process caching
 
-The compiled-code disk cache eliminates recompilation, but each new process invocation still reads the cached file from disk. In warm-container environments (e.g. AWS Lambda), the same process handles multiple invocations, so caching the `Engine` and compiled `Module` objects in Python module-level variables would skip that disk read on subsequent invocations within the same container.
+`executor.py` currently creates a new `wasmtime.Engine`, `wasmtime.component.Linker`, and `wasmtime.component.Component` on each `_call_component()` invocation. Timing instrumentation in `_call_component()` (see [CANONICAL_ABI_PERF.md](decisions/CANONICAL_ABI_PERF.md)) showed that with a warm disk cache, `Component.from_file()` costs ~0.003s and `Store`/`Linker` construction is essentially free.
 
-- `Engine`, `Module`, and `Component` are immutable — safe to reuse across calls with no risk of state leaking between invocations
-- The `Engine` only needs a single instance (singleton) since the compilation settings don't vary
-- A module-level `dict` keyed by resolved file path would cache compiled `Module` or `Component` objects (one per `.wasm` file, type depending on the path taken)
-- `Store` and `Instance` hold mutable state (the Wasm linear memory) — these must be fresh per-call
+Although negligible, if these initialization costs were a concern, the approach would be to cache at module level:
+
+- `_engine` — `wasmtime.Engine` singleton, created once with `cache = True`
+- `_linker` — `wasmtime.component.Linker` singleton, created once with `add_wasip2()`
+- `_component_cache` — `dict[Path, wasmtime.component.Component]`, keyed by resolved `.wasm` path
+
+Cache invalidation on `force_download=True` would require evicting `_component_cache` entries for affected paths after URI resolution.
+
+Note that `Store` and `Instance` hold mutable Wasm linear memory and should still be created fresh per call.
