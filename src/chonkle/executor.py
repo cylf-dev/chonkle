@@ -15,6 +15,10 @@ from chonkle.wasm_download import resolve_uri
 
 log = logging.getLogger(__name__)
 
+# WIT interface export key as it appears in a compiled Component Model binary.
+# Update this if the WIT package name or interface name changes.
+CODEC_TRANSFORM_IFACE = "chonkle:codec/transform@0.1.0"
+
 type PortMap = list[tuple[str, bytes]]
 
 
@@ -512,11 +516,10 @@ def _get_function(
     fn_name: str,
     wasm_path: Path,
 ) -> Any:
-    """Return the named Func from a component's exports.
+    """Return the named Func from the CODEC_TRANSFORM_IFACE interface export.
 
-    Searches world-level exports first, then interface-level exports.
-    Codec components export 'transform' as an interface, so encode/decode
-    live one level down inside that interface.
+    Components must be compiled against codec.wit and export the transform
+    interface under the exact key defined by CODEC_TRANSFORM_IFACE.
 
     Args:
         instance: Instantiated Wasmtime component.
@@ -530,32 +533,24 @@ def _get_function(
         The located Wasmtime Func.
 
     Raises:
-        RuntimeError: The function is not found in any export scope.
+        RuntimeError: The function is not found in the expected interface.
     """
     comp_exports = component_type.exports(engine)
-
-    for name, item in comp_exports.items():
-        if (
-            isinstance(item, wasmtime.component.FuncType)
-            and name == fn_name
-            and (idx := instance.get_export_index(store, name)) is not None
+    item = comp_exports.get(CODEC_TRANSFORM_IFACE)
+    if isinstance(item, wasmtime.component.ComponentInstanceType):
+        iface_exports = item.exports(engine)
+        if fn_name in iface_exports and isinstance(
+            iface_exports[fn_name], wasmtime.component.FuncType
         ):
-            return instance.get_func(store, idx)
-
-    for iface_name, item in comp_exports.items():
-        if isinstance(item, wasmtime.component.ComponentInstanceType):
-            iface_exports = item.exports(engine)
-            if fn_name in iface_exports and isinstance(
-                iface_exports[fn_name], wasmtime.component.FuncType
-            ):
-                if (iface_idx := instance.get_export_index(store, iface_name)) is None:
-                    continue
+            iface_idx = instance.get_export_index(store, CODEC_TRANSFORM_IFACE)
+            if iface_idx is not None:
                 fn_idx = instance.get_export_index(store, fn_name, iface_idx)
                 if fn_idx is not None:
                     return instance.get_func(store, fn_idx)
 
     msg = (
         f"Component at {wasm_path} does not export {fn_name!r} "
-        "(expected in chonkle:codec/transform interface)"
+        f"in the {CODEC_TRANSFORM_IFACE!r} interface. "
+        "Components must be compiled against codec.wit."
     )
     raise RuntimeError(msg)

@@ -5,15 +5,16 @@ an *implementation* — it describes the DAG, the wiring, and the baked-in
 constants. It is not a codec signature, and its schema is not the same as a
 signature's.
 
-A pipeline is conceptually a codec: a codec signature for the pipeline can be
+However, a pipeline is conceptually a codec: a codec signature for the pipeline can be
 derived from the pipeline JSON. The input names and types come directly from the
-`inputs` field, and the output types can be inferred by tracing each output
-wiring reference back through the step signatures.
+`inputs` field; constants appear as optional inputs with their baked-in value as
+the default; and output types are inferred by tracing each output wiring reference
+back through the step signatures.
 
-A pipeline can therefore appear as a step inside another pipeline. When a step
-`src` resolves to a pipeline JSON rather than a `.wasm`, the executor recurses
-into the nested pipeline rather than calling a Wasm component. See
-`docs/PROTOSPEC_NOTES.md` for analysis of this decision.
+A pipeline can therefore appear as a step inside another pipeline. This is not
+yet implemented: the executor currently requires every step `src` to resolve to
+a `.wasm` component. Nested pipeline support (detecting a `.json` `src` and
+recursing into `run()`) is planned.
 
 ## Top-level fields
 
@@ -41,8 +42,8 @@ and in a future registry for resolving this pipeline as a step in outer pipeline
 
 ### `direction` (string, required)
 `"encode"` or `"decode"`. Declares which direction this pipeline definition
-represents. Pipeline inversion (DAG reversal for the opposite direction) is not
-yet implemented.
+represents. Pass a `direction` to `run()` that differs from `pipeline.direction`
+to execute the pipeline in the opposite direction.
 
 ### `inputs` (object, required)
 The pipeline's public input ports — what callers must supply. Each key is a port
@@ -56,9 +57,9 @@ name; each value is a descriptor:
   signature will carry this annotation so that outer pipelines can handle it
   correctly.
 
-`required` and `default` are intentionally absent. Those properties belong to a
-codec's internal contract — the pipeline layer has no fallback mechanism. Optional
-parameters with defaults should be expressed as `constants`.
+`required` and `default` are absent. All pipeline inputs are caller-supplied —
+there is no fallback at the pipeline boundary. Parameters with baked-in values
+belong in `constants`.
 
 ### `constants` (object, optional)
 Values baked into the pipeline definition. Constants are never supplied by the
@@ -69,16 +70,25 @@ caller. Each key is a constant name; each value is a descriptor:
   `"bool"`, `"uint[]"`, `"dtype_desc"`.
 - `value` (required): the constant's value.
 
-Constants are always present; `required` and `encode_only` do not apply.
-Encode-only routing for constant-sourced ports is handled at the step level via
+`required` and `encode_only` do not apply to constants directly. Encode-only
+routing for constant-sourced ports is handled at the step level via
 `encode_only_inputs`.
 
-Constants are a convenience for pipeline authors: they are a way of saying "I
-have made this decision for the caller." Conceptually, a constant is just an
-input whose value the pipeline author has pre-decided. If a codec signature were
-derived from the pipeline, each constant would appear as an optional input with
-the constant's value as its default — invisible to callers who don't care, but
-overridable by callers who do.
+Constants use the `constant.<name>` wiring namespace, which is distinct from
+`input.<name>`. During pipeline inversion, pipeline inputs become pipeline outputs
+(and vice versa), but constants remain constants — available as configuration in
+both directions. The executor implements this by identifying `constant.*` wiring
+refs in `_inverted_port_map` and injecting them into the step port-map regardless
+of direction, following the protospec inversion rule: "constants remain constants."
+The same behavior could be expressed without a separate namespace by checking the
+input descriptor (`required: false` with a `default`); the `constant.*` namespace
+is kept because it makes the intent explicit at the wiring ref level.
+
+In a derived codec signature, each constant appears as an optional input with the
+constant's baked-in value as the default. A constant is conceptually an input the
+pipeline author has pre-decided. When nested pipeline support is implemented, the
+executor will allow callers to supply a value in `inputs` to override a constant;
+until then, the baked-in value is always used.
 
 ### `outputs` (object, required)
 Maps each pipeline output port name to the step port that produces it. The key
@@ -119,11 +129,9 @@ during validation.
 
 ### `src` (string, required)
 URI of the codec artifact. Supported schemes: `file://`, `https://`, `oci://`.
-The artifact is either a `.wasm` component (leaf codec) or a pipeline JSON
-(pipeline-valued codec). For `.wasm` artifacts, a `.signature.json` sidecar is
-expected at the same location (or as a layer in the same OCI artifact). For
-pipeline JSON artifacts, the signature is derived from the pipeline's own
-`inputs` and `outputs` fields; no sidecar is required.
+The artifact must be a `.wasm` component; a `.signature.json` sidecar is
+expected at the same location (or as a layer in the same OCI artifact).
+Pipeline JSON artifacts as step sources are not yet supported.
 
 ### `inputs` (object, required)
 Maps each codec input port name to a wiring reference. The key is the port name
@@ -254,7 +262,7 @@ steps
 **Ours**:
 `"encode_only_inputs": ["level"]` on the step
 
-The protospec records `encode_only` in the codec signature. Our executor needs
+The protospec records `encode_only` in the codec signature. Our pipeline executor needs
 to know which inputs to skip during decode at parse time, before signatures are
 loaded. Surfacing this on the step makes the pipeline self-contained for routing
 purposes and allows validation at parse time. It is expected to be consistent

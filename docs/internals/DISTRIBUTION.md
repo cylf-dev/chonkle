@@ -59,7 +59,7 @@ The language-specific registries have no generic binary support. To use them for
 
 GHCR (`ghcr.io`) is the OCI-compliant registry within GitHub Packages. While technically part of the same product, it behaves very differently from the language-specific registries above: it supports arbitrary OCI artifacts (not just Docker images), allows anonymous pulls for public packages, and is scoped to orgs/users rather than individual repos.
 
-This is the approach the broader Wasm ecosystem is converging on.
+OCI is the distribution substrate the broader Wasm ecosystem is converging on; higher-level registries like warg/wa.dev build the Component Model registry protocol on top of it.
 
 ### How it works
 
@@ -101,7 +101,7 @@ The Bytecode Alliance has developed [warg](https://warg.io/), a registry protoco
 
 warg and wa.dev are built around the [WebAssembly Component Model](https://component-model.bytecodealliance.org/), a higher-level abstraction on top of core WebAssembly. The registry expects artifacts to be Component Model components — a binary format distinct from plain wasm modules. Components declare typed interfaces using WIT (WebAssembly Interface Types), and the registry can index that metadata for discovery. Packages are addressed as `namespace:name@version` (a warg protocol convention), and even WIT interface definitions are compiled to wasm and published as packages.
 
-chonkle supports both **Core Wasm modules** and **Component Model components**. For Core modules, which don't use WIT or the Component Model, the lower-level `wkg oci` commands could technically be used, but the registry's discovery, metadata, and tooling wouldn't apply — we'd be working against the grain of the ecosystem. For Component codecs, warg/wa.dev is a better fit, though the tooling is still early-stage.
+chonkle codecs are **Component Model components** — they declare typed WIT interfaces and are compiled to component binaries. This is exactly what warg/wa.dev is designed to index and distribute, making it a natural fit for the project.
 
 ### Pros
 
@@ -112,7 +112,6 @@ chonkle supports both **Core Wasm modules** and **Component Model components**. 
 
 ### Cons
 
-- Oriented toward Component Model artifacts; Core Wasm modules don't benefit from its metadata or discovery
 - Still maturing — the original warg registry implementation is no longer actively developed, with work continuing in `wasm-pkg-tools`
 - Tooling and ecosystem are early-stage
 
@@ -136,6 +135,6 @@ Codec repositories use a single GitHub Actions workflow that publishes `.wasm` f
 - **GitHub Releases** — simple HTTP GET, no tooling required on the consumer side
 - **GHCR** — OCI-based distribution, aligned with where the Wasm ecosystem is heading
 
-**warg / wa.dev** is a natural fit for distributing Component codecs (e.g. `componentize-py`-authored modules), but its tooling is still early-stage. For Core Wasm modules, which don't align with the Component Model registry model, it provides little benefit and adds complexity.
+**warg / wa.dev** is the long-term target for distributing chonkle codecs — all codecs are Component Model components, which is exactly what the registry is designed for. Migration is deferred until the tooling matures further.
 
 **GitHub Packages** (npm, Maven, etc.) is not a good fit for this use case and can be ruled out.

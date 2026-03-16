@@ -29,8 +29,8 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   when calling `run()`. When `direction == pipeline.direction`, execution is
   forward (current order, current WIT function). When they differ, execution is
   inverted: steps run in reversed topological order, the opposite WIT function is
-  called, port-maps are built from `step.outputs`, and results are routed back
-  through `step.inputs` wiring refs.
+  called, port-maps are built from `step.outputs` plus constant-wired non-encode_only
+  inputs, and results are routed back through `step.inputs` wiring refs.
 
 ## Subsystems
 

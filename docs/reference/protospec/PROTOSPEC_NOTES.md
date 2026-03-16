@@ -130,6 +130,27 @@ same contract as a leaf codec signature. The internal constructs — `direction`
 implementation details of the executor. At the boundary, a pipeline looks like
 any other codec: typed ports in, typed ports out.
 
+The protospec does not specify the derived signature algorithm for
+pipeline-valued codecs. Two gaps:
+
+- **Constants**: the protospec defines constants as values "not supplied by the
+  caller" but does not say how they appear in the derived signature. The correct
+  treatment: each constant appears as an optional input with the baked-in value
+  as its default. A constant is conceptually an input the pipeline author has
+  pre-decided; the default captures that decision while leaving room for callers
+  to override it in the future. The `constant.*` wiring namespace is kept as a
+  distinct namespace from `input.*` for clarity — it makes authorial intent
+  explicit in the wiring ref itself — but it is not logically required: the same
+  inversion behavior could be derived from the input descriptor (`required:
+  false` with a `default` implies "available in both directions," the same as
+  the absence of `encode_only` on a codec signature input).
+
+- **Outputs**: a codec signature's `outputs` maps names to type descriptors. A
+  pipeline's `outputs` maps names to wiring references (`step_name.port_name`).
+  The shapes differ. Output types are derivable by tracing each wiring reference
+  to its source step's `.signature.json`, but this requires loading signatures
+  and is not readable from the pipeline JSON alone.
+
 ### Behavioral compatibility
 
 Since every codec implements both `encode` and `decode`, a pipeline must also be
