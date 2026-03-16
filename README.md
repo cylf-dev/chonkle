@@ -130,9 +130,8 @@ outputs of previous steps.
     "def": "decode_def.bytes",
     "rep": "decode_rep.bytes"
   },
-  "steps": [
-    {
-      "name": "decompress",
+  "steps": {
+    "decompress": {
       "codec_id": "zstd",
       "src": "https://example.org/codecs/zstd.wasm",
       "inputs": {
@@ -140,8 +139,7 @@ outputs of previous steps.
       },
       "outputs": ["bytes"]
     },
-    {
-      "name": "split",
+    "split": {
       "codec_id": "parquet-page-v2-split",
       "src": "https://example.org/codecs/parquet-page-v2-split.wasm",
       "inputs": {
@@ -151,8 +149,7 @@ outputs of previous steps.
       },
       "outputs": ["rep_bytes", "def_bytes", "value_bytes"]
     },
-    {
-      "name": "decode_values",
+    "decode_values": {
       "codec_id": "rle-parquet",
       "src": "https://example.org/codecs/rle-parquet.wasm",
       "inputs": {
@@ -161,8 +158,7 @@ outputs of previous steps.
       },
       "outputs": ["bytes"]
     },
-    {
-      "name": "decode_def",
+    "decode_def": {
       "codec_id": "rle-parquet",
       "src": "https://example.org/codecs/rle-parquet.wasm",
       "inputs": {
@@ -171,8 +167,7 @@ outputs of previous steps.
       },
       "outputs": ["bytes"]
     },
-    {
-      "name": "decode_rep",
+    "decode_rep": {
       "codec_id": "rle-parquet",
       "src": "https://example.org/codecs/rle-parquet.wasm",
       "inputs": {
@@ -181,7 +176,7 @@ outputs of previous steps.
       },
       "outputs": ["bytes"]
     }
-  ]
+  }
 }
 ```
 
@@ -202,17 +197,12 @@ The wiring syntax (`input.<name>`, `<step>.<output>`, `constant.<name>`),
 the typed port model, and the distinction between `encode_only` and
 bidirectional inputs all follow the inventory's definitions. However, a number of divergences exist between the protospec and the pipeline schema shown above:
 
-- **`steps` is an array, not an object.** JSON objects have no guaranteed key
-  order across parsers. An array makes execution order explicit. The step name
-  moves into the object as a `name` field.
 - **`"codec"` renamed to `"codec_id"` in steps.** `codec_id` is the consistent
   term throughout the schema; `codec` would be the only place the shorter form
   appeared.
 - **`src` added to steps (required for now).** The protospec assumes a registry
   that resolves codecs by `codec_id`; no registry exists yet. `src` is a direct
   URI to the `.wasm` file and will become optional once a registry is in place.
-- **`name` added to steps.** A direct consequence of switching `steps` to an
-  array — the step name must live somewhere in the object.
 - **Step `outputs` is an array of port names, not an alias object.** The
   protospec maps codec port names to local wiring aliases
   (`{"bytes": "raw_uints"}`). Our wiring references use codec port names

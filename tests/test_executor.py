@@ -38,16 +38,15 @@ def _make_simple_pipeline(src: str = "file:///fake.wasm") -> dict:
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {"level": {"type": "int", "value": 3}},
         "outputs": {"bytes": "codec.bytes"},
-        "steps": [
-            {
-                "name": "codec",
+        "steps": {
+            "codec": {
                 "codec_id": "codec",
                 "src": src,
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                 "outputs": ["bytes"],
                 "encode_only_inputs": ["level"],
             }
-        ],
+        },
     }
 
 
@@ -59,16 +58,15 @@ def _make_decode_pipeline(src: str = "file:///fake.wasm") -> dict:
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {"level": {"type": "int", "value": 3}},
         "outputs": {"bytes": "codec.bytes"},
-        "steps": [
-            {
-                "name": "codec",
+        "steps": {
+            "codec": {
                 "codec_id": "codec",
                 "src": src,
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                 "outputs": ["bytes"],
                 "encode_only_inputs": ["level"],
             }
-        ],
+        },
     }
 
 
@@ -108,22 +106,20 @@ class TestRunWiring:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {"bytes": "step_b.bytes"},
-            "steps": [
-                {
-                    "name": "step_a",
+            "steps": {
+                "step_a": {
                     "codec_id": "some-codec",
                     "src": "file:///a.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "step_b",
+                "step_b": {
                     "codec_id": "some-codec",
                     "src": "file:///b.wasm",
                     "inputs": {"bytes": "step_a.bytes"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         call_log: list = []
@@ -156,9 +152,8 @@ class TestRunWiring:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {"level": {"type": "int", "value": 5}},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///s.wasm",
                     "inputs": {
@@ -167,7 +162,7 @@ class TestRunWiring:
                     },
                     "outputs": ["bytes"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         received_pm: list = []
@@ -192,9 +187,8 @@ class TestRunWiring:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {"sym_table": {"type": "string", "value": "abc"}},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///s.wasm",
                     "inputs": {
@@ -204,7 +198,7 @@ class TestRunWiring:
                     "outputs": ["bytes"],
                     "encode_only_inputs": ["sym_table"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         received_pm: list = []
@@ -230,9 +224,8 @@ class TestRunWiring:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {"sym_table": {"type": "string", "value": "abc"}},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///s.wasm",
                     "inputs": {
@@ -242,7 +235,7 @@ class TestRunWiring:
                     "outputs": ["bytes"],
                     "encode_only_inputs": ["sym_table"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         received_pm: list = []
@@ -271,15 +264,14 @@ class TestRunWiring:
             },
             "constants": {},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///s.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
 
@@ -306,15 +298,14 @@ class TestRunWiring:
             },
             "constants": {},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///s.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
 
@@ -336,29 +327,26 @@ class TestRunWiring:
                 "a_out": "proc_a.bytes",
                 "b_out": "proc_b.bytes",
             },
-            "steps": [
-                {
-                    "name": "split",
+            "steps": {
+                "split": {
                     "codec_id": "page-split",
                     "src": "file:///split.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["a", "b"],
                 },
-                {
-                    "name": "proc_a",
+                "proc_a": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "split.a"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "proc_b",
+                "proc_b": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "split.b"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
 
@@ -398,15 +386,14 @@ class TestResolveUriIntegration:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "https://example.com/codec.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(pipeline_data)
 
@@ -461,7 +448,6 @@ class TestSignatureValidation:
         if step_outputs is None:
             step_outputs = ["bytes"]
         step: dict = {
-            "name": "s",
             "codec_id": "some-codec",
             "src": f"file:///{wasm_file}",
             "inputs": step_inputs,
@@ -486,7 +472,7 @@ class TestSignatureValidation:
                 "inputs": pipeline_inputs,
                 "constants": {},
                 "outputs": {"bytes": f"s.{step_outputs[0]}"},
-                "steps": [step],
+                "steps": {"s": step},
             }
         )
 
@@ -694,22 +680,20 @@ class TestSignatureValidation:
                 "inputs": {"bytes": {"type": "bytes"}},
                 "constants": {},
                 "outputs": {"bytes": "step_b.bytes"},
-                "steps": [
-                    {
-                        "name": "step_a",
+                "steps": {
+                    "step_a": {
                         "codec_id": "some-codec",
                         "src": f"file:///{wasm_a}",
                         "inputs": {"bad_a": "input.bytes"},
                         "outputs": ["bytes"],
                     },
-                    {
-                        "name": "step_b",
+                    "step_b": {
                         "codec_id": "some-codec",
                         "src": f"file:///{wasm_b}",
                         "inputs": {"bad_b": "step_a.bytes"},
                         "outputs": ["bytes"],
                     },
-                ],
+                },
             }
         )
 
@@ -775,15 +759,14 @@ class TestSignatureValidation:
                 "inputs": {"data": {"type": "int"}},
                 "constants": {},
                 "outputs": {"data": "s.data"},
-                "steps": [
-                    {
-                        "name": "s",
+                "steps": {
+                    "s": {
                         "codec_id": "some-codec",
                         "src": f"file:///{wasm_file}",
                         "inputs": {"data": "input.data"},
                         "outputs": ["data"],
                     }
-                ],
+                },
             }
         )
 
@@ -813,15 +796,14 @@ class TestSignatureValidation:
                 "inputs": {"bytes": {"type": "bytes"}},
                 "constants": {"level": {"type": "int", "value": 3}},
                 "outputs": {"bytes": "s.bytes"},
-                "steps": [
-                    {
-                        "name": "s",
+                "steps": {
+                    "s": {
                         "codec_id": "some-codec",
                         "src": f"file:///{wasm_file}",
                         "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                         "outputs": ["bytes"],
                     }
-                ],
+                },
             }
         )
 
@@ -856,22 +838,20 @@ class TestSignatureValidation:
                 "inputs": {"bytes": {"type": "bytes"}},
                 "constants": {},
                 "outputs": {"bytes": "step_b.bytes"},
-                "steps": [
-                    {
-                        "name": "step_a",
+                "steps": {
+                    "step_a": {
                         "codec_id": "codec-a",
                         "src": f"file:///{wasm_a}",
                         "inputs": {"bytes": "input.bytes"},
                         "outputs": ["bytes"],
                     },
-                    {
-                        "name": "step_b",
+                    "step_b": {
                         "codec_id": "codec-b",
                         "src": f"file:///{wasm_b}",
                         "inputs": {"bytes": "step_a.bytes"},
                         "outputs": ["bytes"],
                     },
-                ],
+                },
             }
         )
 
@@ -920,15 +900,14 @@ class TestSignatureValidation:
                 "inputs": {"bytes": {}},
                 "constants": {},
                 "outputs": {"bytes": "s.bytes"},
-                "steps": [
-                    {
-                        "name": "s",
+                "steps": {
+                    "s": {
                         "codec_id": "some-codec",
                         "src": f"file:///{wasm_file}",
                         "inputs": {"bytes": "input.bytes"},
                         "outputs": ["bytes"],
                     }
-                ],
+                },
             }
         )
 
@@ -1015,22 +994,20 @@ class TestInvertedExecution:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {"bytes": "step_b.bytes"},
-            "steps": [
-                {
-                    "name": "step_a",
+            "steps": {
+                "step_a": {
                     "codec_id": "some-codec",
                     "src": "file:///a.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "step_b",
+                "step_b": {
                     "codec_id": "some-codec",
                     "src": "file:///b.wasm",
                     "inputs": {"bytes": "step_a.bytes"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         call_order: list[str] = []
@@ -1059,22 +1036,20 @@ class TestInvertedExecution:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {"bytes": "step_b.bytes"},
-            "steps": [
-                {
-                    "name": "step_a",
+            "steps": {
+                "step_a": {
                     "codec_id": "some-codec",
                     "src": "file:///a.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "step_b",
+                "step_b": {
                     "codec_id": "some-codec",
                     "src": "file:///b.wasm",
                     "inputs": {"bytes": "step_a.bytes"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         received: dict[str, list] = {}
@@ -1113,36 +1088,32 @@ class TestInvertedExecution:
                 "def_": "identity_def.bytes",
                 "data": "identity_data.bytes",
             },
-            "steps": [
-                {
-                    "name": "page_split",
+            "steps": {
+                "page_split": {
                     "codec_id": "page-split",
                     "src": "file:///split.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["rep_levels", "def_levels", "data"],
                 },
-                {
-                    "name": "identity_rep",
+                "identity_rep": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "page_split.rep_levels"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "identity_def",
+                "identity_def": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "page_split.def_levels"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "identity_data",
+                "identity_data": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "page_split.data"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         received: dict[str, list] = {}
@@ -1200,16 +1171,15 @@ class TestInvertedExecution:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {"level": {"type": "int", "value": 9}},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///s.wasm",
                     "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                     "outputs": ["bytes"],
                     "encode_only_inputs": ["level"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         received_port_maps: list = []

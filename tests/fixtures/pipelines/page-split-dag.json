@@ -11,9 +11,8 @@
     "def_levels": "identity_def.bytes",
     "data": "identity_data.bytes"
   },
-  "steps": [
-    {
-      "name": "page_split",
+  "steps": {
+    "page_split": {
       "codec_id": "page-split",
       "src": "file:///path/to/codecs/page-split-rs/target/wasm32-wasip2/release/page_split_rs.wasm",
       "inputs": {
@@ -23,8 +22,7 @@
       },
       "outputs": ["rep_levels", "def_levels", "data"]
     },
-    {
-      "name": "identity_rep",
+    "identity_rep": {
       "codec_id": "identity",
       "src": "file:///path/to/codecs/identity-py/identity.wasm",
       "inputs": {
@@ -32,8 +30,7 @@
       },
       "outputs": ["bytes"]
     },
-    {
-      "name": "identity_def",
+    "identity_def": {
       "codec_id": "identity",
       "src": "file:///path/to/codecs/identity-py/identity.wasm",
       "inputs": {
@@ -41,8 +38,7 @@
       },
       "outputs": ["bytes"]
     },
-    {
-      "name": "identity_data",
+    "identity_data": {
       "codec_id": "identity",
       "src": "file:///path/to/codecs/identity-py/identity.wasm",
       "inputs": {
@@ -50,5 +46,5 @@
       },
       "outputs": ["bytes"]
     }
-  ]
+  }
 }

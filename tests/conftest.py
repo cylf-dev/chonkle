@@ -78,8 +78,8 @@ def cog_decode_pipeline_json() -> dict:
             f"file://{CODEC_DIR / 'tiff-predictor-2-c' / 'tiff-predictor-2.wasm'}"
         ),
     }
-    for step in pipeline["steps"]:
-        step["src"] = step_srcs[step["name"]]
+    for name, step in pipeline["steps"].items():
+        step["src"] = step_srcs[name]
     return pipeline
 
 
@@ -97,8 +97,8 @@ def cog_encode_pipeline_json() -> dict:
         ),
         "zlib": f"file://{CODEC_DIR / 'zlib-rs' / 'zlib.wasm'}",
     }
-    for step in pipeline["steps"]:
-        step["src"] = step_srcs[step["name"]]
+    for name, step in pipeline["steps"].items():
+        step["src"] = step_srcs[name]
     return pipeline
 
 

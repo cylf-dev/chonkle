@@ -32,7 +32,7 @@ recursing into `run()`) is planned.
   "outputs": {
     "bytes": "zstd.bytes"
   },
-  "steps": [...]
+  "steps": {...}
 }
 ```
 
@@ -97,31 +97,31 @@ is a wiring reference of the form `step_name.port_name`. An output port may be
 renamed relative to the source step's port name. Types are not declared here —
 they are derived from the source step's codec signature during validation.
 
-### `steps` (array, required)
-An ordered array of step objects. See [Steps](#steps) below.
+### `steps` (object, required)
+A named map of step objects. Keys are step names (unique DAG node identifiers). See [Steps](#steps) below.
 
 ---
 
 ## Steps
 
 ```json
-{
-  "name": "zstd",
-  "codec_id": "zstd",
-  "src": "file:///path/to/zstd_rs.wasm",
-  "inputs": {
-    "bytes": "input.bytes",
-    "level": "constant.level"
-  },
-  "outputs": ["bytes"],
-  "encode_only_inputs": ["level"]
+"steps": {
+  "zstd": {
+    "codec_id": "zstd",
+    "src": "file:///path/to/zstd_rs.wasm",
+    "inputs": {
+      "bytes": "input.bytes",
+      "level": "constant.level"
+    },
+    "outputs": ["bytes"],
+    "encode_only_inputs": ["level"]
+  }
 }
 ```
 
-### `name` (string, required)
-The unique DAG node identifier for this step. Used in wiring references by
-downstream steps and pipeline outputs (`step_name.port_name`). Multiple steps
-may share a `codec_id` but must have distinct `name` values.
+Each key in the `steps` object is the step name — the unique DAG node identifier
+used in wiring references (`step_name.port_name`). Multiple steps may share a
+`codec_id` but must have distinct keys.
 
 ### `codec_id` (string, required)
 The logical codec identifier. Matched against the codec signature's `codec_id`
@@ -176,18 +176,6 @@ pre-execution pass once all codec signatures are loaded.
 The protospec pipeline format is the upstream reference. The following changes
 were made deliberately.
 
-### `steps` is an array, not an object
-
-**Protospec**:
-`"steps": { "step_name": { ... } }`
-
-**Ours**:
-`"steps": [ { "name": "step_name", ... } ]`
-
-JSON objects do not have a guaranteed key order in all parsers and languages.
-Using an array makes execution order explicit and unambiguous without relying
-on insertion order. The step name is moved into the object as the `name` field.
-
 ### `"codec"` renamed to `"codec_id"` in steps
 
 **Protospec**:
@@ -211,17 +199,6 @@ no equivalent
 The protospec assumes a registry from which codecs are resolved by `codec_id`.
 No such registry exists yet. `src` provides a direct URI to the `.wasm` file
 and will become optional once a registry is in place.
-
-### `name` added to steps
-
-**Protospec**:
-step name is the object key
-
-**Ours**:
-`"name": "step_name"` inside the step object
-
-A direct consequence of switching `steps` to an array. The name must live
-somewhere inside the object; `name` is the natural field for it.
 
 ### Step `outputs` is an array of port names, not an object
 

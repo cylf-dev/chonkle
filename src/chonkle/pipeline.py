@@ -124,9 +124,9 @@ class Pipeline:
         outputs = dict(data.get("outputs", {}))
 
         steps: list[StepSpec] = []
-        for step_data in data.get("steps", []):
+        for step_name, step_data in data.get("steps", {}).items():
             step = StepSpec(
-                name=step_data["name"],
+                name=step_name,
                 codec_id=step_data["codec_id"],
                 src=step_data["src"],
                 inputs=dict(step_data.get("inputs", {})),

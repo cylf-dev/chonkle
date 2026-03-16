@@ -95,12 +95,12 @@ class TestParsePipeline:
 
     def test_missing_direction_raises(self) -> None:
         with pytest.raises(ValueError, match="direction"):
-            Pipeline.parse({"codec_id": "t", "inputs": {}, "steps": []})
+            Pipeline.parse({"codec_id": "t", "inputs": {}, "steps": {}})
 
     def test_invalid_direction_raises(self) -> None:
         with pytest.raises(ValueError, match="direction"):
             Pipeline.parse(
-                {"codec_id": "t", "direction": "transform", "inputs": {}, "steps": []}
+                {"codec_id": "t", "direction": "transform", "inputs": {}, "steps": {}}
             )
 
     def test_missing_codec_id_raises(self) -> None:
@@ -111,15 +111,14 @@ class TestParsePipeline:
                     "inputs": {"bytes": {"type": "bytes"}},
                     "constants": {},
                     "outputs": {"bytes": "s.bytes"},
-                    "steps": [
-                        {
-                            "name": "s",
+                    "steps": {
+                        "s": {
                             "codec_id": "some-codec",
                             "src": "file:///fake.wasm",
                             "inputs": {"bytes": "input.bytes"},
                             "outputs": ["bytes"],
                         }
-                    ],
+                    },
                 }
             )
 
@@ -130,15 +129,14 @@ class TestParsePipeline:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {"bytes": "s.bytes"},
-            "steps": [
-                {
-                    "name": "s",
+            "steps": {
+                "s": {
                     "codec_id": "some-codec",
                     "src": "file:///fake.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["bytes"],
                 }
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         assert pipeline.direction == "encode"
@@ -152,20 +150,19 @@ class TestWiringValidation:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {},
-            "steps": [],
+            "steps": {},
         }
 
     def test_valid_input_ref(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
             }
-        ]
+        }
         data["outputs"] = {"bytes": "s.bytes"}
         pipeline = Pipeline.parse(data)
         assert pipeline.execution_order == ["s"]
@@ -173,122 +170,112 @@ class TestWiringValidation:
     def test_valid_constant_ref(self) -> None:
         data = self._base()
         data["constants"] = {"level": {"type": "int", "value": 3}}
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                 "outputs": ["bytes"],
             }
-        ]
+        }
         pipeline = Pipeline.parse(data)
         assert len(pipeline.steps) == 1
 
     def test_valid_step_to_step_ref(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "a",
+        data["steps"] = {
+            "a": {
                 "codec_id": "some-codec",
                 "src": "file:///a.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
             },
-            {
-                "name": "b",
+            "b": {
                 "codec_id": "some-codec",
                 "src": "file:///b.wasm",
                 "inputs": {"bytes": "a.bytes"},
                 "outputs": ["bytes"],
             },
-        ]
+        }
         pipeline = Pipeline.parse(data)
         assert pipeline.execution_order.index("a") < pipeline.execution_order.index("b")
 
     def test_same_codec_id_different_names_valid(self) -> None:
         """The same codec may appear multiple times with distinct step names."""
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "proc_a",
+        data["steps"] = {
+            "proc_a": {
                 "codec_id": "identity",
                 "src": "file:///identity.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
             },
-            {
-                "name": "proc_b",
+            "proc_b": {
                 "codec_id": "identity",
                 "src": "file:///identity.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
             },
-        ]
+        }
         pipeline = Pipeline.parse(data)
         assert {s.name for s in pipeline.steps} == {"proc_a", "proc_b"}
         assert all(s.codec_id == "identity" for s in pipeline.steps)
 
     def test_undefined_input_raises(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.missing"},
                 "outputs": ["bytes"],
             }
-        ]
+        }
         with pytest.raises(ValueError, match="input 'missing' is not declared"):
             Pipeline.parse(data)
 
     def test_undefined_constant_raises(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"n": "constant.missing"},
                 "outputs": ["bytes"],
             }
-        ]
+        }
         with pytest.raises(ValueError, match="constant 'missing' is not declared"):
             Pipeline.parse(data)
 
     def test_undefined_step_raises(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"bytes": "ghost.bytes"},
                 "outputs": ["bytes"],
             }
-        ]
+        }
         with pytest.raises(ValueError, match="step 'ghost' does not exist"):
             Pipeline.parse(data)
 
     def test_undefined_step_output_port_raises(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "a",
+        data["steps"] = {
+            "a": {
                 "codec_id": "some-codec",
                 "src": "file:///a.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
             },
-            {
-                "name": "b",
+            "b": {
                 "codec_id": "some-codec",
                 "src": "file:///b.wasm",
                 "inputs": {"bytes": "a.nonexistent"},
                 "outputs": ["bytes"],
             },
-        ]
+        }
         with pytest.raises(
             ValueError, match="does not declare output port 'nonexistent'"
         ):
@@ -311,15 +298,14 @@ class TestWiringValidation:
 
     def test_undefined_pipeline_output_ref_raises(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
             }
-        ]
+        }
         data["outputs"] = {"out": "s.missing_port"}
         with pytest.raises(
             ValueError, match="does not declare output port 'missing_port'"
@@ -329,60 +315,36 @@ class TestWiringValidation:
     def test_encode_only_input_not_in_inputs_raises(self) -> None:
         """encode_only_input absent from step inputs raises at parse time."""
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
+        data["steps"] = {
+            "s": {
                 "codec_id": "some-codec",
                 "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.bytes"},
                 "outputs": ["bytes"],
                 "encode_only_inputs": ["level"],  # "level" not in inputs
             }
-        ]
+        }
         with pytest.raises(
             ValueError, match="encode_only_input 'level' is not declared in inputs"
         ):
             Pipeline.parse(data)
 
-    def test_duplicate_step_name_raises(self) -> None:
-        data = self._base()
-        data["steps"] = [
-            {
-                "name": "s",
-                "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
-                "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
-            },
-            {
-                "name": "s",
-                "codec_id": "other-codec",
-                "src": "file:///fake.wasm",
-                "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
-            },
-        ]
-        with pytest.raises(ValueError, match="Duplicate step name"):
-            Pipeline.parse(data)
-
     def test_cycle_detection(self) -> None:
         data = self._base()
-        data["steps"] = [
-            {
-                "name": "a",
+        data["steps"] = {
+            "a": {
                 "codec_id": "some-codec",
                 "src": "file:///a.wasm",
                 "inputs": {"bytes": "b.bytes"},
                 "outputs": ["bytes"],
             },
-            {
-                "name": "b",
+            "b": {
                 "codec_id": "some-codec",
                 "src": "file:///b.wasm",
                 "inputs": {"bytes": "a.bytes"},
                 "outputs": ["bytes"],
             },
-        ]
+        }
         with pytest.raises(ValueError, match="cycle"):
             Pipeline.parse(data)
 
@@ -395,29 +357,26 @@ class TestTopologicalOrder:
             "inputs": {"x": {"type": "bytes"}},
             "constants": {},
             "outputs": {"x": "c.x"},
-            "steps": [
-                {
-                    "name": "c",
+            "steps": {
+                "c": {
                     "codec_id": "some-codec",
                     "src": "file:///c.wasm",
                     "inputs": {"x": "b.x"},
                     "outputs": ["x"],
                 },
-                {
-                    "name": "b",
+                "b": {
                     "codec_id": "some-codec",
                     "src": "file:///b.wasm",
                     "inputs": {"x": "a.x"},
                     "outputs": ["x"],
                 },
-                {
-                    "name": "a",
+                "a": {
                     "codec_id": "some-codec",
                     "src": "file:///a.wasm",
                     "inputs": {"x": "input.x"},
                     "outputs": ["x"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         order = pipeline.execution_order
@@ -431,29 +390,26 @@ class TestTopologicalOrder:
             "inputs": {"bytes": {"type": "bytes"}},
             "constants": {},
             "outputs": {},
-            "steps": [
-                {
-                    "name": "split",
+            "steps": {
+                "split": {
                     "codec_id": "page-split",
                     "src": "file:///split.wasm",
                     "inputs": {"bytes": "input.bytes"},
                     "outputs": ["a", "b"],
                 },
-                {
-                    "name": "proc_a",
+                "proc_a": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "split.a"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "proc_b",
+                "proc_b": {
                     "codec_id": "identity",
                     "src": "file:///id.wasm",
                     "inputs": {"bytes": "split.b"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         order = pipeline.execution_order
@@ -467,22 +423,20 @@ class TestTopologicalOrder:
             "inputs": {"a": {"type": "bytes"}, "b": {"type": "bytes"}},
             "constants": {},
             "outputs": {},
-            "steps": [
-                {
-                    "name": "step_a",
+            "steps": {
+                "step_a": {
                     "codec_id": "some-codec",
                     "src": "file:///a.wasm",
                     "inputs": {"bytes": "input.a"},
                     "outputs": ["bytes"],
                 },
-                {
-                    "name": "step_b",
+                "step_b": {
                     "codec_id": "some-codec",
                     "src": "file:///b.wasm",
                     "inputs": {"bytes": "input.b"},
                     "outputs": ["bytes"],
                 },
-            ],
+            },
         }
         pipeline = Pipeline.parse(data)
         assert set(pipeline.execution_order) == {"step_a", "step_b"}

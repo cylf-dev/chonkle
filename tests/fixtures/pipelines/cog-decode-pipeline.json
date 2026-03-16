@@ -8,9 +8,8 @@
     "level":            {"type": "int", "value": 9}
   },
   "outputs": {"bytes": "predictor2.bytes"},
-  "steps": [
-    {
-      "name": "zlib",
+  "steps": {
+    "zlib": {
       "codec_id": "zlib",
       "src": "file:///path/to/codec/zlib-rs/zlib.wasm",
       "inputs": {
@@ -20,8 +19,7 @@
       "outputs": ["bytes"],
       "encode_only_inputs": ["level"]
     },
-    {
-      "name": "predictor2",
+    "predictor2": {
       "codec_id": "tiff-predictor-2",
       "src": "file:///path/to/codec/tiff-predictor-2-c/tiff-predictor-2.wasm",
       "inputs": {
@@ -31,5 +29,5 @@
       },
       "outputs": ["bytes"]
     }
-  ]
+  }
 }

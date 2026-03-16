@@ -81,26 +81,24 @@ world codec {
   "inputs": {"bytes": {"type": "bytes"}},
   "constants": {"level": {"type": "int", "value": 3}},
   "outputs": {"bytes": "step_name.port_name"},
-  "steps": [
-    {
-      "name": "step_name",
+  "steps": {
+    "step_name": {
       "codec_id": "some-codec",
       "src": "file:///path/to/codec.wasm",
       "inputs": {"bytes": "input.bytes", "level": "constant.level"},
       "outputs": ["bytes"],
       "encode_only_inputs": ["level"]
     }
-  ]
+  }
 }
 ```
 
 Field notes:
 
 - `codec_id` at the pipeline level is required (a pipeline is itself a codec per protospec)
-- `name` within each step is the unique DAG node identifier; used in wiring references; must be
-  unique within the pipeline
+- Each step's key in the `steps` object is the unique DAG node identifier; used in wiring references; must be unique within the pipeline
 - `codec_id` within each step is the logical codec identifier; the same codec may appear as
-  multiple steps with different `name` values
+  multiple steps with different keys
 - `src` is the URI of the codec implementation (will become optional once a registry exists)
 - Wiring reference forms: `input.<name>`, `constant.<name>`, `<step_name>.<port>`
 - `inputs` (pipeline level) are typed dicts: `{"port": {"type": "..."}}`; step `outputs` are arrays of port name strings: `["port1", "port2"]`
