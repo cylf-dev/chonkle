@@ -1,0 +1,10 @@
+{
+  "codec_id": "zlib",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "level": {"type": "int", "required": false, "default": 6, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  }
+}

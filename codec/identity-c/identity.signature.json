@@ -1,0 +1,5 @@
+{
+  "codec_id": "identity",
+  "inputs": {"bytes": {"type": "bytes", "required": true}},
+  "outputs": {"bytes": {"type": "bytes"}}
+}

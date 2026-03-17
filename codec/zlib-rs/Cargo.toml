@@ -1,0 +1,16 @@
+[package]
+name = "zlib"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = { version = "0.44.0", features = ["bitflags"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[package.metadata.component]
+package = "chonkle:codec"
+
+[package.metadata.component.dependencies]
