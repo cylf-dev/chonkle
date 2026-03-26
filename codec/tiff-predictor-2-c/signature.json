@@ -1,5 +1,6 @@
 {
   "codec_id": "tiff-predictor-2",
+  "implementation": "tiff-predictor-2-c",
   "inputs": {
     "bytes":            {"type": "bytes", "required": true},
     "bytes_per_sample": {"type": "int",   "required": true},

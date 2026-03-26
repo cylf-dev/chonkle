@@ -12,6 +12,7 @@ import wasmtime.component
 
 from chonkle.pipeline import Direction, Pipeline, StepSpec, WiringRef
 from chonkle.wasm_download import resolve_uri
+from chonkle.wasm_signature import read_signature
 
 log = logging.getLogger(__name__)
 
@@ -300,10 +301,9 @@ def _validate_signatures(
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
         wasm_path = wasm_paths[step_name]
-        signature_path = wasm_path.parent / (wasm_path.stem + ".signature.json")
         try:
             output_types = _validate_signature(
-                step, signature_path, direction, pipeline, step_output_types
+                step, wasm_path, direction, pipeline, step_output_types
             )
             step_output_types[step_name] = output_types or {}
         except (ValueError, FileNotFoundError) as exc:
@@ -368,13 +368,14 @@ def _check_input_types(
 
 def _validate_signature(
     step: StepSpec,
-    signature_path: Path,
+    wasm_path: Path,
     direction: str,
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
 ) -> dict[str, str]:
-    """Verify a step's port declarations against its codec signature sidecar.
+    """Verify a step's port declarations against its embedded codec signature.
 
+    Reads the ``chonkle:signature`` custom section from the ``.wasm`` binary.
     Each check is a subset check — the step need not use every port the codec
     declares. Input validation is direction-aware: encode_only ports are
     excluded from the valid input set when direction is "decode". After name
@@ -383,7 +384,7 @@ def _validate_signature(
 
     Args:
         step: Step whose declared inputs and outputs are being checked.
-        signature_path: Path to the .signature.json sidecar file.
+        wasm_path: Path to the ``.wasm`` binary with an embedded signature.
         direction: Runtime execution direction ("encode" or "decode").
         pipeline: The pipeline, used to resolve input and constant types.
         step_output_types: Accumulated output types from previously validated
@@ -393,15 +394,10 @@ def _validate_signature(
         Mapping of output port name to type string, from the signature.
 
     Raises:
-        FileNotFoundError: The signature sidecar does not exist.
-        ValueError: Declared ports are not valid per the signature.
+        ValueError: No embedded signature found, or declared ports are not
+            valid per the signature.
     """
-    if not signature_path.exists():
-        msg = f"Step {step.name!r}: signature not found at {signature_path}"
-        raise FileNotFoundError(msg)
-
-    with signature_path.open() as f:
-        signature = json.load(f)
+    signature = read_signature(wasm_path)
 
     errors: list[str] = []
 
@@ -456,7 +452,7 @@ def _validate_signature(
 
     if errors:
         joined = "; ".join(errors)
-        msg = f"Step {step.name!r}: {joined} (from {signature_path})"
+        msg = f"Step {step.name!r}: {joined} (from {wasm_path})"
         raise ValueError(msg)
 
     return {

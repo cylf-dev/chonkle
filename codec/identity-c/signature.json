@@ -1,5 +1,6 @@
 {
   "codec_id": "identity",
+  "implementation": "identity-c",
   "inputs": {"bytes": {"type": "bytes", "required": true}},
   "outputs": {"bytes": {"type": "bytes"}}
 }

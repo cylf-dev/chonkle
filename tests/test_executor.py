@@ -1,6 +1,5 @@
 """Tests for DAG executor via Wasmtime Component Model."""
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,9 +7,19 @@ import pytest
 
 from chonkle.executor import run
 from chonkle.pipeline import Pipeline
+from chonkle.wasm_signature import embed_signature
 
 _REPO_ROOT = Path(__file__).parent.parent
 _CODEC_DIR = _REPO_ROOT / "codec"
+
+# Minimal valid Component Model header (magic + version, no sections).
+_CM_HEADER = b"\x00asm\x0d\x00\x01\x00"
+
+
+def _wasm_with_signature(signature: dict) -> bytes:
+    """Return minimal .wasm bytes with an embedded chonkle:signature section."""
+    return embed_signature(_CM_HEADER, signature)
+
 
 # Tests below this marker require compiled codec .wasm files.
 # They will not pass until the codecs are built in a separate session.
@@ -479,12 +488,11 @@ class TestSignatureValidation:
     def test_signature_mismatch_raises(self, tmp_path: Path) -> None:
         """A signature with an unknown output port name raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"wrong_port": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file, step_outputs=["bytes"])
 
         with (
@@ -496,7 +504,6 @@ class TestSignatureValidation:
     def test_matching_signature_does_not_raise(self, tmp_path: Path) -> None:
         """A signature matching declared ports does not raise."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {
                 "bytes": {"type": "bytes", "required": True},
@@ -504,7 +511,7 @@ class TestSignatureValidation:
             },
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(
             wasm_file,
             step_inputs={"bytes": "input.bytes"},
@@ -522,12 +529,11 @@ class TestSignatureValidation:
     def test_signature_unknown_input_raises(self, tmp_path: Path) -> None:
         """A step wiring a port not in the signature inputs raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         # Step wires "wrong" which is not in signature inputs
         pipeline = self._make_pipeline(
             wasm_file,
@@ -544,7 +550,6 @@ class TestSignatureValidation:
     def test_signature_encode_only_excluded_during_decode(self, tmp_path: Path) -> None:
         """encode_only inputs are excluded from valid decode inputs; no raise."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {
                 "bytes": {"type": "bytes", "required": True},
@@ -552,7 +557,7 @@ class TestSignatureValidation:
             },
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         # Step wires "level" but marks it as encode_only; decode direction skips it
         pipeline = self._make_pipeline(
             wasm_file,
@@ -573,12 +578,11 @@ class TestSignatureValidation:
     def test_signature_subset_output_passes(self, tmp_path: Path) -> None:
         """Declaring fewer outputs than the signature advertises is valid."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}, "checksum": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         # Step only declares "bytes", not "checksum"
         pipeline = self._make_pipeline(wasm_file, step_outputs=["bytes"])
 
@@ -593,9 +597,8 @@ class TestSignatureValidation:
     def test_signature_outputs_key_absent_skips_check(self, tmp_path: Path) -> None:
         """A signature with no 'outputs' key skips output validation."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {"inputs": {"bytes": {"type": "bytes", "required": True}}}
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -609,9 +612,8 @@ class TestSignatureValidation:
     def test_signature_inputs_key_absent_skips_check(self, tmp_path: Path) -> None:
         """A signature with no 'inputs' key skips input validation."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {"outputs": {"bytes": {"type": "bytes"}}}
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -625,12 +627,11 @@ class TestSignatureValidation:
     def test_signature_both_wrong_reports_both(self, tmp_path: Path) -> None:
         """When both inputs and outputs are wrong, the error reports both."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(
             wasm_file,
             step_inputs={"bad_in": "input.bytes"},
@@ -648,30 +649,27 @@ class TestSignatureValidation:
         assert "not valid signature outputs" in str(exc_info.value)
 
     def test_missing_signature_raises(self, tmp_path: Path) -> None:
-        """A codec with no .signature.json sidecar raises ValueError."""
+        """A .wasm with no embedded chonkle:signature section raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        # Deliberately omit codec.signature.json
+        wasm_file.write_bytes(_CM_HEADER)
         pipeline = self._make_pipeline(wasm_file)
 
         with (
             patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="signature not found"),
+            pytest.raises(ValueError, match="chonkle:signature"),
         ):
             run(pipeline, {"bytes": b"data"}, pipeline.direction)
 
     def test_two_steps_both_wrong_reports_both(self, tmp_path: Path) -> None:
         """Signature errors from multiple steps are all reported in one exception."""
-        wasm_a = tmp_path / "codec_a.wasm"
-        wasm_b = tmp_path / "codec_b.wasm"
-        wasm_a.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        wasm_b.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec_a.signature.json").write_text(json.dumps(signature))
-        (tmp_path / "codec_b.signature.json").write_text(json.dumps(signature))
+        wasm_a = tmp_path / "codec_a.wasm"
+        wasm_b = tmp_path / "codec_b.wasm"
+        wasm_a.write_bytes(_wasm_with_signature(signature))
+        wasm_b.write_bytes(_wasm_with_signature(signature))
 
         pipeline = Pipeline.parse(
             {
@@ -711,12 +709,11 @@ class TestSignatureValidation:
     def test_signature_input_port_missing_type_raises(self, tmp_path: Path) -> None:
         """A signature input port without a 'type' field raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"required": True}},  # no "type"
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -728,12 +725,11 @@ class TestSignatureValidation:
     def test_signature_output_port_missing_type_raises(self, tmp_path: Path) -> None:
         """A signature output port without a 'type' field raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {}},  # no "type"
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -745,12 +741,11 @@ class TestSignatureValidation:
     def test_type_mismatch_pipeline_input_raises(self, tmp_path: Path) -> None:
         """Pipeline input type mismatch against codec signature raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"data": {"type": "bytes", "required": True}},
             "outputs": {"data": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         # Pipeline declares input "data" as type "int"; codec expects "bytes".
         pipeline = Pipeline.parse(
             {
@@ -779,7 +774,6 @@ class TestSignatureValidation:
     def test_type_mismatch_constant_raises(self, tmp_path: Path) -> None:
         """Constant type mismatch against codec signature raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {
                 "bytes": {"type": "bytes", "required": True},
@@ -787,7 +781,7 @@ class TestSignatureValidation:
             },
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         # Constant "level" has type "int"; codec expects "bytes".
         pipeline = Pipeline.parse(
             {
@@ -815,10 +809,6 @@ class TestSignatureValidation:
 
     def test_type_mismatch_step_output_raises(self, tmp_path: Path) -> None:
         """Step output type mismatch against downstream codec input raises."""
-        wasm_a = tmp_path / "codec_a.wasm"
-        wasm_b = tmp_path / "codec_b.wasm"
-        wasm_a.write_bytes(b"\x00asm\x0d\x00\x01\x00")
-        wasm_b.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         sig_a = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
@@ -828,8 +818,10 @@ class TestSignatureValidation:
             "inputs": {"bytes": {"type": "int", "required": True}},
             "outputs": {"bytes": {"type": "int"}},
         }
-        (tmp_path / "codec_a.signature.json").write_text(json.dumps(sig_a))
-        (tmp_path / "codec_b.signature.json").write_text(json.dumps(sig_b))
+        wasm_a = tmp_path / "codec_a.wasm"
+        wasm_b = tmp_path / "codec_b.wasm"
+        wasm_a.write_bytes(_wasm_with_signature(sig_a))
+        wasm_b.write_bytes(_wasm_with_signature(sig_b))
 
         pipeline = Pipeline.parse(
             {
@@ -867,12 +859,11 @@ class TestSignatureValidation:
     def test_type_match_passes(self, tmp_path: Path) -> None:
         """Matching types across pipeline input and codec signature do not raise."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
         with (
@@ -886,12 +877,11 @@ class TestSignatureValidation:
     def test_missing_type_in_source_skips_check(self, tmp_path: Path) -> None:
         """Pipeline input with no 'type' key skips type check without raising."""
         wasm_file = tmp_path / "codec.wasm"
-        wasm_file.write_bytes(b"\x00asm\x0d\x00\x01\x00")
         signature = {
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
-        (tmp_path / "codec.signature.json").write_text(json.dumps(signature))
+        wasm_file.write_bytes(_wasm_with_signature(signature))
         # Pipeline input descriptor has no "type" key.
         pipeline = Pipeline.parse(
             {
