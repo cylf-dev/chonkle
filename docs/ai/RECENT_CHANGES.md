@@ -4,10 +4,19 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **`tools/` package removed**: `embed_signature` CLI moved from
+  `python -m chonkle.tools.embed_signature` to `chonkle embed-signature`
+  subcommand in `cli.py`. The `src/chonkle/tools/` package is deleted.
+
+- **`__init__.py` cleanup**: removed all re-exports from both
+  `chonkle/__init__.py` and `chonkle/codecs/__init__.py`. Both are now
+  docstring-only. All internal and test imports point directly at the
+  defining module (e.g. `from chonkle.codecs._base import Codec`).
+
 - **Code review refactor**: comprehensive review and cleanup of `src/chonkle/`.
   - Split `codecs.py` (620 lines) into `codecs/` package: `_base.py` (ABC,
     `PortMap`, `detect_codec_type`), `component.py`, `core.py`, `native.py`,
-    `__init__.py` (re-exports). All existing imports remain valid.
+    `__init__.py` (docstring-only).
   - Type safety: added `OutputPortMap` type alias for `list[tuple[str, bytes |
     CoreWasmRef]]`, widened `Codec.call()` return annotation, removed 4
     `type: ignore` suppressions from executor and codecs.

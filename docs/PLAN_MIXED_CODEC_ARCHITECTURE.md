@@ -144,7 +144,7 @@ for step_name in execution_order:
 
 Build integration:
 ```bash
-python -m chonkle.tools.embed_signature codec.wasm signature.json
+chonkle embed-signature codec.wasm signature.json
 ```
 
 The `signature.json` in each codec's source directory is a build input (like a
@@ -649,7 +649,7 @@ downstream codec type.
 ### Phase 1: Signature embedding infrastructure
 
 - Add `implementation` field to signature format
-- Implement `chonkle:signature` custom section writer (`chonkle.tools.embed_signature`)
+- Implement `chonkle:signature` custom section writer (`chonkle embed-signature` CLI subcommand)
 - Implement pure-Python custom section reader
 - Embed signatures into existing codec `.wasm` files (move `signature.json` to
   source dirs, add post-build embed step)

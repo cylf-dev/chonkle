@@ -1,12 +1,14 @@
 """CLI entry point for chonkle."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from chonkle.executor import prepare, run
 from chonkle.pipeline import Pipeline
 from chonkle.resolver import Resolver
+from chonkle.wasm_signature import embed_signature
 
 
 def main() -> None:
@@ -91,11 +93,29 @@ def main() -> None:
         help="Path to the local codec store directory.",
     )
 
+    # --- embed-signature command ---
+    embed_parser = subparsers.add_parser(
+        "embed-signature",
+        help="Embed a signature JSON file into a .wasm binary as a custom section.",
+    )
+    embed_parser.add_argument(
+        "wasm_file",
+        type=Path,
+        help="Path to the .wasm binary (modified in-place).",
+    )
+    embed_parser.add_argument(
+        "signature_json",
+        type=Path,
+        help="Path to the signature JSON file.",
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         _run_command(args)
     elif args.command == "codecs":
         _codecs_command(args)
+    elif args.command == "embed-signature":
+        _embed_signature_command(args)
 
 
 def _build_resolver(args: argparse.Namespace, pipeline: Pipeline) -> Resolver:
@@ -186,3 +206,16 @@ def _codecs_command(args: argparse.Namespace) -> None:
                 f"{entry.implementation or '(unnamed)':<20s} "
                 f"{entry.codec_type:<12s}\n"
             )
+
+
+def _embed_signature_command(args: argparse.Namespace) -> None:
+    """Embed a codec signature into a .wasm binary."""
+    wasm_bytes = args.wasm_file.read_bytes()
+    with args.signature_json.open() as f:
+        signature = json.load(f)
+
+    result = embed_signature(wasm_bytes, signature)
+    args.wasm_file.write_bytes(result)
+
+    added = len(result) - len(wasm_bytes)
+    sys.stdout.write(f"Embedded {added} byte custom section in {args.wasm_file}\n")

@@ -127,13 +127,12 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   from a file path, `read_signature_bytes()` from in-memory bytes,
   `embed_signature()` appends or replaces the section. Works with both core and
   Component Model binaries. No wasmtime dependency.
-- **tools** (`tools/embed_signature.py`): CLI tool to embed a `signature.json`
-  file into a `.wasm` binary as a `chonkle:signature` custom section.
-  `python -m chonkle.tools.embed_signature <wasm> <signature.json>`.
 - **cli** (`cli.py`): `chonkle run --pipeline pipeline.json --input name=file`
   command with `--codec-store`, `--preference`, `--override` flags for
   resolver configuration. `chonkle codecs [codec_id]` subcommand lists
-  installed codec implementations.
+  installed codec implementations. `chonkle embed-signature <wasm> <sig.json>`
+  embeds a signature JSON file into a `.wasm` binary as a `chonkle:signature`
+  custom section (build-time tool).
 
 ## Codec Interface (Component Model WIT)
 
@@ -207,7 +206,7 @@ Field notes:
 Each `.wasm` binary contains a `chonkle:signature` custom section with the
 protospec codec signature as JSON. **Required** — `_validate_signature()` raises
 `ValueError` if absent. The signature is embedded at build time using
-`python -m chonkle.tools.embed_signature`. Source `signature.json` files in each
+`chonkle embed-signature`. Source `signature.json` files in each
 codec's source directory are build inputs (not distribution artifacts).
 
 ```json

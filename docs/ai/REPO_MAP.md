@@ -48,14 +48,15 @@ its build source. `codec/README.md` documents the build process for each codec.
 
 ## Source — `src/chonkle/`
 
-Core library. All public API is re-exported from `__init__.py`.
+Core library. `__init__.py` files are docstring-only; import from the
+defining module directly (e.g. `from chonkle.executor import prepare`).
 
 - **pipeline.py** — DAG pipeline parsing and validation. Entry point: `parse()`.
   Parses pipeline JSON into a `Pipeline` dataclass, validates all wiring
   references, and produces a topologically sorted `execution_order`.
   Key types: `Pipeline`, `StepSpec`, `WiringRef`.
-- **codecs/** — Codec wrapper package. `__init__.py` re-exports all public
-  names. Submodules:
+- **codecs/** — Codec wrapper package. `__init__.py` is docstring-only;
+  import from submodules directly. Submodules:
   - **codecs/_base.py** — `Codec` ABC with `call(direction, port_map)` and
     `signature()`. `PortMap` type alias, `SIGNATURES_DIR`,
     `CODEC_TRANSFORM_IFACE`, `detect_codec_type()`.
@@ -101,13 +102,13 @@ Core library. All public API is re-exported from `__init__.py`.
 - **cli.py** — `chonkle run` command. Accepts `--pipeline`, `--input NAME=FILE`,
   `--output NAME=FILE`, `--codec-store`, `--preference`, `--override`.
   `chonkle codecs [codec_id]` subcommand lists installed implementations.
+  `chonkle embed-signature <wasm> <sig.json>` embeds a signature into a
+  `.wasm` binary (build-time tool).
 - **signatures/numcodecs/** — Bundled signature JSON files for native
   (numcodecs) codecs. One file per supported codec (e.g., `zlib.json`,
   `gzip.json`, `delta.json`). Each includes the standard signature fields
   plus `data_format` (`"bytes"` or `"ndarray"`). Adding support for a new
   numcodecs codec requires only adding a JSON file here.
-- **tools/embed_signature.py** — CLI tool to embed a `signature.json` file into
-  a `.wasm` binary. `python -m chonkle.tools.embed_signature <wasm> <sig.json>`.
 
 ## Tests — `tests/`
 

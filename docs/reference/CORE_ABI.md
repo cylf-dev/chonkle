@@ -92,7 +92,7 @@ Host                              Module
 Core wasm codecs embed a `chonkle:signature` custom section in the `.wasm` binary, identical in format to Component Model codecs. The signature is embedded as a post-build step:
 
 ```bash
-python -m chonkle.tools.embed_signature codec.wasm signature.json
+chonkle embed-signature codec.wasm signature.json
 ```
 
 ## Relationship to Component Model WIT
