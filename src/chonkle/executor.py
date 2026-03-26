@@ -4,58 +4,111 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import wasmtime
-import wasmtime.component
 
+from chonkle.codecs import Codec, ComponentCodec, PortMap, detect_codec_type
 from chonkle.pipeline import Direction, Pipeline, StepSpec, WiringRef
 from chonkle.wasm_download import resolve_uri
-from chonkle.wasm_signature import read_signature
 
 log = logging.getLogger(__name__)
 
-# WIT interface export key as it appears in a compiled Component Model binary.
-# Update this if the WIT package name or interface name changes.
-CODEC_TRANSFORM_IFACE = "chonkle:codec/transform@0.1.0"
 
-type PortMap = list[tuple[str, bytes]]
+@dataclass
+class PreparedPipeline:
+    """A pipeline that has been validated and is ready for execution.
+
+    Created by :func:`prepare`.  Pass to :func:`run` to execute.
+    """
+
+    pipeline: Pipeline
+    direction: Direction
+    codecs: Mapping[str, Codec]
 
 
-def run(
+def prepare(
     pipeline: Pipeline,
-    inputs: dict[str, bytes],
     direction: Direction,
     *,
     force_download: bool = False,
-) -> dict[str, bytes]:
-    """Execute a pipeline in the specified direction and return output port values.
+) -> PreparedPipeline:
+    """Validate a pipeline and prepare it for execution.
+
+    Resolves codec URIs, instantiates codec wrappers (which load embedded
+    signatures), and validates all step signatures.  If this returns
+    successfully, the pipeline is guaranteed executable for the given
+    direction.
 
     Args:
         pipeline: Parsed and validated pipeline DAG.
-        inputs: Pipeline-level input names mapped to byte values.  For forward
-            execution (``direction == pipeline.direction``) keys correspond to
-            ``pipeline.inputs`` names.  For inverted execution keys correspond
-            to ``pipeline.outputs`` names — the caller provides data for the
-            "other side" of the pipeline boundary.
-        direction: Direction to execute: ``"decode"`` or ``"encode"``.
-            May differ from ``pipeline.direction`` to invert the DAG.
-        force_download: Re-download codec .wasm files even if cached.
+        direction: Direction to execute (``"encode"`` or ``"decode"``).
+        force_download: Re-download codec ``.wasm`` files even if cached.
 
     Returns:
-        Pipeline output names mapped to byte values.  For forward execution
-        the keys are ``pipeline.outputs`` names; for inverted execution the
-        keys are ``pipeline.inputs`` data-port names.
+        A :class:`PreparedPipeline` ready for :func:`run`.
 
     Raises:
-        ValueError: A required input is missing or signature validation fails.
-        RuntimeError: A codec component call returns an error.
+        ValueError: Signature validation fails or a codec type is
+            unsupported.
     """
+    step_by_name = {s.name: s for s in pipeline.steps}
+
+    # Phase 1: resolve all codec URIs to local paths.
+    wasm_paths = {
+        name: resolve_uri(step_by_name[name].src, force_download=force_download)
+        for name in pipeline.execution_order
+    }
+
+    # Phase 2: create codec wrapper instances (loads signatures from
+    # embedded custom sections).
+    config = wasmtime.Config()
+    config.cache = True
+    engine = wasmtime.Engine(config)
+
+    codecs: dict[str, Codec] = {}
+    for step_name in pipeline.execution_order:
+        wasm_path = wasm_paths[step_name]
+        codec_type = detect_codec_type(wasm_path)
+        if codec_type == "component":
+            codecs[step_name] = ComponentCodec(engine, wasm_path)
+        else:
+            msg = f"Core Wasm codecs are not yet supported: {wasm_path}"
+            raise ValueError(msg)
+
+    # Phase 3: validate all signatures before any component is called.
+    _validate_signatures(pipeline, step_by_name, codecs, direction)
+
+    return PreparedPipeline(pipeline=pipeline, direction=direction, codecs=codecs)
+
+
+def run(
+    prepared: PreparedPipeline,
+    inputs: dict[str, bytes],
+) -> dict[str, bytes]:
+    """Execute a prepared pipeline and return output port values.
+
+    Args:
+        prepared: A :class:`PreparedPipeline` from :func:`prepare`.
+        inputs: Pipeline-level input names mapped to byte values.  For
+            forward execution (``direction == pipeline.direction``) keys
+            correspond to ``pipeline.inputs`` names.  For inverted
+            execution keys correspond to ``pipeline.outputs`` names.
+
+    Returns:
+        Pipeline output names mapped to byte values.
+
+    Raises:
+        ValueError: A required input is missing.
+        RuntimeError: A codec call returns an error.
+    """
+    pipeline = prepared.pipeline
+    direction = prepared.direction
     inverted = direction != pipeline.direction
 
     if not inverted:
-        # Forward: require pipeline.inputs keys; skip encode_only for decode.
         required = [
             name
             for name, desc in pipeline.inputs.items()
@@ -66,7 +119,6 @@ def run(
                 msg = f"Missing pipeline input: {name!r}"
                 raise ValueError(msg)
     else:
-        # Inverted: require pipeline.outputs keys (the "other side").
         for name in pipeline.outputs:
             if name not in inputs:
                 msg = f"Missing pipeline input: {name!r}"
@@ -74,55 +126,24 @@ def run(
 
     step_by_name = {s.name: s for s in pipeline.steps}
 
-    # Phase 1: resolve all codec URIs to local paths.
-    wasm_paths = {
-        name: resolve_uri(step_by_name[name].src, force_download=force_download)
-        for name in pipeline.execution_order
-    }
-
-    # Phase 2: validate all signatures before any component is called.
-    _validate_signatures(pipeline, step_by_name, wasm_paths, direction)
-
-    # Phase 3: build the shared Wasmtime engine and execute.
-    config = wasmtime.Config()
-    config.cache = True
-    engine = wasmtime.Engine(config)
-
-    if direction != pipeline.direction:
+    if inverted:
         return _execute_inverted(
-            pipeline, step_by_name, wasm_paths, inputs, direction, engine
+            pipeline, step_by_name, prepared.codecs, inputs, direction
         )
-    return _execute_forward(
-        pipeline, step_by_name, wasm_paths, inputs, direction, engine
-    )
+    return _execute_forward(pipeline, step_by_name, prepared.codecs, inputs, direction)
 
 
 def _execute_forward(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
-    wasm_paths: dict[str, Path],
+    codecs: Mapping[str, Codec],
     inputs: dict[str, bytes],
     direction: Direction,
-    engine: wasmtime.Engine,
 ) -> dict[str, bytes]:
-    """Execute steps in topological order, calling the direction WIT function.
+    """Execute steps in topological order, calling the direction function.
 
     Seeds value_store with constants and pipeline inputs (omitting encode_only
     inputs when direction is ``"decode"``).
-
-    Args:
-        pipeline: Validated pipeline with execution_order, constants, and outputs.
-        step_by_name: Step name to StepSpec lookup.
-        wasm_paths: Step name to resolved local .wasm path.
-        inputs: Caller-provided byte values keyed by pipeline input names.
-        direction: Runtime execution direction.
-        engine: Shared Wasmtime engine (carries the compilation cache).
-
-    Returns:
-        Pipeline output names mapped to byte values.
-
-    Raises:
-        RuntimeError: A codec component call fails or returns an Err result.
     """
     value_store: dict[str, bytes] = {}
 
@@ -143,7 +164,7 @@ def _execute_forward(
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
-        output_map = _call_component(engine, wasm_paths[step_name], direction, port_map)
+        output_map = codecs[step_name].call(direction, port_map)
         for port_name, value in output_map:
             value_store[f"{step_name}.{port_name}"] = value
 
@@ -155,39 +176,16 @@ def _execute_forward(
 def _execute_inverted(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
-    wasm_paths: dict[str, Path],
+    codecs: Mapping[str, Codec],
     inputs: dict[str, bytes],
     direction: Direction,
-    engine: wasmtime.Engine,
 ) -> dict[str, bytes]:
-    """Execute steps in reversed topological order, routing results backward.
-
-    Seeds value_store from pipeline output wiring refs (the caller provides
-    data for the "other side" of the pipeline boundary), then runs each step
-    in reverse calling the direction WIT function.
-
-    Args:
-        pipeline: Validated pipeline with execution_order, constants, and outputs.
-        step_by_name: Step name to StepSpec lookup.
-        wasm_paths: Step name to resolved local .wasm path.
-        inputs: Caller-provided byte values keyed by pipeline output names.
-        direction: Runtime execution direction.
-        engine: Shared Wasmtime engine (carries the compilation cache).
-
-    Returns:
-        Pipeline input names mapped to byte values (excluding encode_only inputs
-        when direction is ``"decode"``).
-
-    Raises:
-        RuntimeError: A codec component call fails or returns an Err result.
-    """
+    """Execute steps in reversed topological order, routing results backward."""
     value_store: dict[str, bytes] = {}
 
     for name, descriptor in pipeline.constants.items():
         value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
 
-    # Seed from pipeline outputs — wiring refs become the starting values for
-    # the reversed traversal.
     for out_name, ref_str in pipeline.outputs.items():
         value_store[ref_str] = inputs[out_name]
 
@@ -197,12 +195,11 @@ def _execute_inverted(
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
-        output_map = _call_component(engine, wasm_paths[step_name], direction, port_map)
+        output_map = codecs[step_name].call(direction, port_map)
         for port_name, value in output_map:
             if port_name in step.inputs and port_name not in step.encode_only_inputs:
                 value_store[step.inputs[port_name]] = value
 
-    # Collect from pipeline inputs; encode_only ports excluded during decode.
     return {
         name: value_store[f"input.{name}"]
         for name, desc in pipeline.inputs.items()
@@ -218,15 +215,6 @@ def _forward_port_map(
     """Build the port-map for a step in forward execution.
 
     Iterates step.inputs, omitting encode_only_inputs when direction is decode.
-
-    Args:
-        step: Step whose inputs define the port names and wiring refs.
-        value_store: Accumulated resolved byte values keyed by wiring ref string.
-        direction: Runtime execution direction; encode_only_inputs are excluded
-            when this is ``"decode"``.
-
-    Returns:
-        List of (port_name, bytes) tuples to pass to the codec component.
     """
     port_map: PortMap = []
     for port_name, ref_str in step.inputs.items():
@@ -245,21 +233,8 @@ def _inverted_port_map(
     """Build the port-map for a step in inverted execution.
 
     The step's forward-direction outputs become its inverted-direction inputs.
-    Inputs wired from constants (non-encode_only) are always included — they
-    are configuration parameters the codec needs in both directions.
+    Inputs wired from constants (non-encode_only) are always included.
     encode_only_inputs are appended only when calling encode.
-
-    Args:
-        step_name: Name of the step; used to look up output values in
-            value_store via the ``"<step_name>.<port>"`` key convention.
-        step: Step whose outputs define which values to look up and whose
-            inputs supply constant-wired parameters and encode_only_inputs.
-        value_store: Accumulated resolved byte values keyed by wiring ref string.
-        direction: Runtime execution direction; encode_only_inputs are appended
-            only when this is ``"encode"``.
-
-    Returns:
-        List of (port_name, bytes) tuples to pass to the codec component.
     """
     port_map: PortMap = []
     for port_name in step.outputs:
@@ -278,35 +253,25 @@ def _inverted_port_map(
 def _validate_signatures(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
-    wasm_paths: dict[str, Path],
+    codecs: Mapping[str, Codec],
     direction: Direction,
 ) -> None:
     """Validate all step signatures before any component is called.
 
     Collects errors from every step and raises a single ValueError listing
-    all problems, so the caller sees every issue at once rather than failing
-    on the first.
-
-    Args:
-        pipeline: Pipeline providing execution_order.
-        step_by_name: Step name to StepSpec lookup.
-        wasm_paths: Step name to resolved local .wasm path.
-        direction: Runtime execution direction (may differ from pipeline.direction).
-
-    Raises:
-        ValueError: One or more steps have signature validation errors.
+    all problems.
     """
     errors: list[str] = []
     step_output_types: dict[str, dict[str, str]] = {}
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
-        wasm_path = wasm_paths[step_name]
+        codec = codecs[step_name]
         try:
             output_types = _validate_signature(
-                step, wasm_path, direction, pipeline, step_output_types
+                step, codec.signature(), direction, pipeline, step_output_types
             )
             step_output_types[step_name] = output_types or {}
-        except (ValueError, FileNotFoundError) as exc:
+        except ValueError as exc:
             errors.append(str(exc))
     if errors:
         raise ValueError("Pipeline signature validation failed:\n" + "\n".join(errors))
@@ -319,29 +284,7 @@ def _check_input_types(
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
 ) -> list[str]:
-    """Return type-mismatch error strings for each active wired input.
-
-    For each active step input, resolves the type declared by the wiring
-    source (pipeline input, constant, or upstream step output) and compares
-    it against the codec's declared type.  Returns an empty list when all
-    types match or when type information is absent on either side.
-
-    Args:
-        step: Step whose active inputs are being type-checked.
-        signature_inputs: Codec signature input descriptors keyed by port name,
-            each containing at least a ``"type"`` field.
-        direction: Runtime execution direction; encode_only_inputs are skipped
-            when this is ``"decode"``.
-        pipeline: The pipeline, used to resolve type info for ``input.*`` and
-            ``constant.*`` wiring refs.
-        step_output_types: Accumulated output types from previously validated
-            upstream steps, keyed by step name then port name; used to resolve
-            types for ``<step>.<port>`` wiring refs.
-
-    Returns:
-        List of human-readable error strings describing type mismatches.
-        Empty when all active inputs pass type checks.
-    """
+    """Return type-mismatch error strings for each active wired input."""
     errors: list[str] = []
     for port_name, ref_str in step.inputs.items():
         if direction == "decode" and port_name in step.encode_only_inputs:
@@ -368,37 +311,31 @@ def _check_input_types(
 
 def _validate_signature(
     step: StepSpec,
-    wasm_path: Path,
+    signature: dict[str, Any],
     direction: str,
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
 ) -> dict[str, str]:
-    """Verify a step's port declarations against its embedded codec signature.
+    """Verify a step's port declarations against a codec signature.
 
-    Reads the ``chonkle:signature`` custom section from the ``.wasm`` binary.
     Each check is a subset check — the step need not use every port the codec
     declares. Input validation is direction-aware: encode_only ports are
-    excluded from the valid input set when direction is "decode". After name
-    checks, each active input's wiring source type is compared against the
-    codec's declared type for that port; a mismatch is an error.
+    excluded from the valid input set when direction is "decode".
 
     Args:
         step: Step whose declared inputs and outputs are being checked.
-        wasm_path: Path to the ``.wasm`` binary with an embedded signature.
+        signature: The codec signature dict (from ``codec.signature()``).
         direction: Runtime execution direction ("encode" or "decode").
         pipeline: The pipeline, used to resolve input and constant types.
         step_output_types: Accumulated output types from previously validated
-            upstream steps, keyed by step name then port name.
+            upstream steps.
 
     Returns:
         Mapping of output port name to type string, from the signature.
 
     Raises:
-        ValueError: No embedded signature found, or declared ports are not
-            valid per the signature.
+        ValueError: Declared ports are not valid per the signature.
     """
-    signature = read_signature(wasm_path)
-
     errors: list[str] = []
 
     if "inputs" in signature:
@@ -418,7 +355,6 @@ def _validate_signature(
         else:
             valid_inputs = set(signature_inputs.keys())
 
-        # Active inputs: wired ports minus encode_only_inputs (skipped during decode).
         active_inputs = set(step.inputs.keys()) - set(step.encode_only_inputs)
         unknown = active_inputs - valid_inputs
         if unknown:
@@ -427,7 +363,6 @@ def _validate_signature(
                 f"{sorted(valid_inputs)}"
             )
 
-        # Type compatibility: check each active wired input.
         errors.extend(
             _check_input_types(
                 step, signature_inputs, direction, pipeline, step_output_types
@@ -452,101 +387,10 @@ def _validate_signature(
 
     if errors:
         joined = "; ".join(errors)
-        msg = f"Step {step.name!r}: {joined} (from {wasm_path})"
+        msg = f"Step {step.name!r}: {joined}"
         raise ValueError(msg)
 
     return {
         port: desc.get("type", "")
         for port, desc in signature.get("outputs", {}).items()
     }
-
-
-def _call_component(
-    engine: wasmtime.Engine,
-    wasm_path: Path,
-    direction: str,
-    port_map: PortMap,
-) -> PortMap:
-    """Call encode or decode on a single Wasm Component Model codec.
-
-    Args:
-        engine: Shared Wasmtime engine (carries the compilation cache).
-        wasm_path: Path to the compiled .wasm file.
-        direction: "encode" or "decode" — selects the exported function.
-        port_map: Named input byte buffers to pass to the component.
-
-    Returns:
-        Named output byte buffers returned by the component.
-
-    Raises:
-        RuntimeError: The component does not export the expected function,
-            or the component returns an Err result.
-    """
-    component = wasmtime.component.Component.from_file(engine, str(wasm_path))
-
-    store = wasmtime.Store(engine)
-    store.set_wasi(wasmtime.WasiConfig())
-    linker = wasmtime.component.Linker(engine)
-    linker.add_wasip2()
-
-    instance = linker.instantiate(store, component)
-    fn = _get_function(instance, store, engine, component.type, direction, wasm_path)
-
-    result = fn(store, port_map)
-    fn.post_return(store)
-
-    # wasmtime returns the Err string directly for a result<T, E> error variant.
-    if isinstance(result, str):
-        msg = f"Codec component {direction} returned error: {result}"
-        raise RuntimeError(msg)
-
-    # Normalize to list[tuple[str, bytes]] in case wasmtime returns lists.
-    return [(str(name), bytes(data)) for name, data in result]
-
-
-def _get_function(
-    instance: wasmtime.component.Instance,
-    store: wasmtime.Store,
-    engine: wasmtime.Engine,
-    component_type: Any,
-    fn_name: str,
-    wasm_path: Path,
-) -> Any:
-    """Return the named Func from the CODEC_TRANSFORM_IFACE interface export.
-
-    Components must be compiled against codec.wit and export the transform
-    interface under the exact key defined by CODEC_TRANSFORM_IFACE.
-
-    Args:
-        instance: Instantiated Wasmtime component.
-        store: Wasmtime store bound to the instance.
-        engine: Wasmtime engine used to inspect types.
-        component_type: Type descriptor of the component.
-        fn_name: Name of the function to locate ("encode" or "decode").
-        wasm_path: Path used only for error messages.
-
-    Returns:
-        The located Wasmtime Func.
-
-    Raises:
-        RuntimeError: The function is not found in the expected interface.
-    """
-    comp_exports = component_type.exports(engine)
-    item = comp_exports.get(CODEC_TRANSFORM_IFACE)
-    if isinstance(item, wasmtime.component.ComponentInstanceType):
-        iface_exports = item.exports(engine)
-        if fn_name in iface_exports and isinstance(
-            iface_exports[fn_name], wasmtime.component.FuncType
-        ):
-            iface_idx = instance.get_export_index(store, CODEC_TRANSFORM_IFACE)
-            if iface_idx is not None:
-                fn_idx = instance.get_export_index(store, fn_name, iface_idx)
-                if fn_idx is not None:
-                    return instance.get_func(store, fn_idx)
-
-    msg = (
-        f"Component at {wasm_path} does not export {fn_name!r} "
-        f"in the {CODEC_TRANSFORM_IFACE!r} interface. "
-        "Components must be compiled against codec.wit."
-    )
-    raise RuntimeError(msg)

@@ -1,12 +1,15 @@
 """Tests for DAG executor via Wasmtime Component Model."""
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from chonkle.executor import run
-from chonkle.pipeline import Pipeline
+from chonkle.codecs import Codec, PortMap
+from chonkle.executor import PreparedPipeline, prepare, run
+from chonkle.pipeline import Direction, Pipeline
 from chonkle.wasm_signature import embed_signature
 
 _REPO_ROOT = Path(__file__).parent.parent
@@ -21,8 +24,48 @@ def _wasm_with_signature(signature: dict) -> bytes:
     return embed_signature(_CM_HEADER, signature)
 
 
+# ---------- Fake codec for wiring tests ----------
+
+
+class _FakeCodec(Codec):
+    """Test double that records calls and returns canned outputs."""
+
+    def __init__(
+        self,
+        call_fn: Any = None,
+        sig: dict | None = None,
+    ) -> None:
+        self._call_fn = call_fn or (lambda d, pm: [("bytes", b"output")])
+        self._sig = sig or {
+            "inputs": {"bytes": {"type": "bytes"}},
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+
+    @property
+    def codec_type(self) -> str:
+        return "component"
+
+    def signature(self) -> dict[str, Any]:
+        return self._sig
+
+    def call(self, direction: Direction, port_map: PortMap) -> PortMap:
+        return self._call_fn(direction, port_map)
+
+
+def _prepared(
+    pipeline: Pipeline,
+    direction: Direction | None = None,
+    codecs: Mapping[str, Codec] | None = None,
+) -> PreparedPipeline:
+    """Build a PreparedPipeline with fake codecs for wiring tests."""
+    if direction is None:
+        direction = pipeline.direction
+    if codecs is None:
+        codecs = {s.name: _FakeCodec() for s in pipeline.steps}
+    return PreparedPipeline(pipeline=pipeline, direction=direction, codecs=codecs)
+
+
 # Tests below this marker require compiled codec .wasm files.
-# They will not pass until the codecs are built in a separate session.
 CODEC_REQUIRED = pytest.mark.skipif(
     True,
     reason="requires compiled codec .wasm files (built in a separate session)",
@@ -80,27 +123,19 @@ def _make_decode_pipeline(src: str = "file:///fake.wasm") -> dict:
 
 
 class TestRunWiring:
-    """Verify executor wiring logic using mocked component calls."""
-
-    @pytest.fixture(autouse=True)
-    def _skip_signature_validation(self):
-        """Patch out signature validation so wiring tests need no sidecar files."""
-        with patch("chonkle.executor._validate_signature"):
-            yield
+    """Verify executor wiring logic using fake codec instances."""
 
     def test_passes_input_bytes_to_step(self, raw_chunk: bytes) -> None:
         pipeline = Pipeline.parse(_make_simple_pipeline())
         received: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received.append((direction, list(port_map)))
             return [("bytes", b"compressed")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/fake.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            result = run(pipeline, {"bytes": raw_chunk}, pipeline.direction)
+        codecs = {"codec": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, codecs=codecs)
+        result = run(prepared, {"bytes": raw_chunk})
 
         assert result == {"bytes": b"compressed"}
         assert len(received) == 1
@@ -133,20 +168,20 @@ class TestRunWiring:
         pipeline = Pipeline.parse(data)
         call_log: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
-            call_log.append((wasm_path.name, list(port_map)))
-            if wasm_path.name == "a.wasm":
-                return [("bytes", b"after_a")]
+        def fake_a(direction, port_map):
+            call_log.append(("a", list(port_map)))
+            return [("bytes", b"after_a")]
+
+        def fake_b(direction, port_map):
+            call_log.append(("b", list(port_map)))
             return [("bytes", b"after_b")]
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path("/" + uri.removeprefix("file:///")),
-            ),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            result = run(pipeline, {"bytes": b"original"}, pipeline.direction)
+        codecs = {
+            "step_a": _FakeCodec(call_fn=fake_a),
+            "step_b": _FakeCodec(call_fn=fake_b),
+        }
+        prepared = _prepared(pipeline, codecs=codecs)
+        result = run(prepared, {"bytes": b"original"})
 
         assert result == {"bytes": b"after_b"}
         _, first_pm = call_log[0]
@@ -176,15 +211,13 @@ class TestRunWiring:
         pipeline = Pipeline.parse(data)
         received_pm: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received_pm.extend(port_map)
             return [("bytes", b"output")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/s.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        codecs = {"s": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, codecs=codecs)
+        run(prepared, {"bytes": b"data"})
 
         pm_dict = dict(received_pm)
         assert pm_dict["level"] == b"5"
@@ -212,15 +245,13 @@ class TestRunWiring:
         pipeline = Pipeline.parse(data)
         received_pm: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received_pm.extend(port_map)
             return [("bytes", b"decoded")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/s.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            run(pipeline, {"bytes": b"encoded"}, pipeline.direction)
+        codecs = {"s": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, codecs=codecs)
+        run(prepared, {"bytes": b"encoded"})
 
         port_names = [name for name, _ in received_pm]
         assert "sym_table" not in port_names
@@ -249,15 +280,13 @@ class TestRunWiring:
         pipeline = Pipeline.parse(data)
         received_pm: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received_pm.extend(port_map)
             return [("bytes", b"encoded")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/s.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        codecs = {"s": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, codecs=codecs)
+        run(prepared, {"bytes": b"data"})
 
         port_names = [name for name, _ in received_pm]
         assert "sym_table" in port_names
@@ -283,17 +312,9 @@ class TestRunWiring:
             },
         }
         pipeline = Pipeline.parse(data)
-
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/s.wasm")),
-            patch(
-                "chonkle.executor._call_component",
-                return_value=[("bytes", b"decoded")],
-            ),
-        ):
-            # Must not raise despite "dtype" being absent from inputs
-            result = run(pipeline, {"bytes": b"encoded"}, pipeline.direction)
-
+        codecs = {"s": _FakeCodec(call_fn=lambda d, pm: [("bytes", b"decoded")])}
+        prepared = _prepared(pipeline, codecs=codecs)
+        result = run(prepared, {"bytes": b"encoded"})
         assert result == {"bytes": b"decoded"}
 
     def test_encode_only_pipeline_input_required_during_encode(self) -> None:
@@ -317,14 +338,15 @@ class TestRunWiring:
             },
         }
         pipeline = Pipeline.parse(data)
-
+        prepared = _prepared(pipeline)
         with pytest.raises(ValueError, match="Missing pipeline input"):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+            run(prepared, {"bytes": b"data"})
 
     def test_missing_input_raises(self) -> None:
         pipeline = Pipeline.parse(_make_simple_pipeline())
+        prepared = _prepared(pipeline)
         with pytest.raises(ValueError, match="Missing pipeline input"):
-            run(pipeline, {}, pipeline.direction)
+            run(prepared, {})
 
     def test_fan_out_routing(self) -> None:
         data = {
@@ -359,36 +381,33 @@ class TestRunWiring:
         }
         pipeline = Pipeline.parse(data)
 
-        def fake_call(_engine, wasm_path, direction, port_map):
-            if wasm_path.name == "split.wasm":
-                data_bytes = port_map[0][1]
-                mid = len(data_bytes) // 2
-                return [("a", data_bytes[:mid]), ("b", data_bytes[mid:])]
-            # identity: return input unchanged
-            return port_map
+        def fake_split(direction, port_map):
+            data_bytes = port_map[0][1]
+            mid = len(data_bytes) // 2
+            return [("a", data_bytes[:mid]), ("b", data_bytes[mid:])]
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path("/" + uri.removeprefix("file:///")),
-            ),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            result = run(pipeline, {"bytes": b"abcdefgh"}, pipeline.direction)
+        codecs = {
+            "split": _FakeCodec(call_fn=fake_split),
+            "proc_a": _FakeCodec(call_fn=lambda d, pm: pm),
+            "proc_b": _FakeCodec(call_fn=lambda d, pm: pm),
+        }
+        prepared = _prepared(pipeline, codecs=codecs)
+        result = run(prepared, {"bytes": b"abcdefgh"})
 
         assert result["a_out"] == b"abcd"
         assert result["b_out"] == b"efgh"
 
 
 class TestResolveUriIntegration:
-    @pytest.fixture(autouse=True)
-    def _skip_signature_validation(self):
-        """Patch out signature validation so URI tests need no sidecar files."""
-        with patch("chonkle.executor._validate_signature"):
-            yield
-
-    def test_https_uri_calls_resolve_uri(self) -> None:
+    def test_https_uri_calls_resolve_uri(self, tmp_path: Path) -> None:
         """https:// URIs are passed to resolve_uri for fetch-caching."""
+        wasm_file = tmp_path / "codec.wasm"
+        sig = {
+            "inputs": {"bytes": {"type": "bytes", "required": True}},
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        wasm_file.write_bytes(_wasm_with_signature(sig))
+
         pipeline_data = {
             "codec_id": "test",
             "direction": "encode",
@@ -406,35 +425,33 @@ class TestResolveUriIntegration:
         }
         pipeline = Pipeline.parse(pipeline_data)
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri", return_value=Path("/fake.wasm")
-            ) as mock_resolve,
-            patch(
-                "chonkle.executor._call_component",
-                return_value=[("bytes", b"out")],
-            ),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with patch(
+            "chonkle.executor.resolve_uri", return_value=wasm_file
+        ) as mock_resolve:
+            prepare(pipeline, pipeline.direction)
 
         mock_resolve.assert_called_once_with(
             "https://example.com/codec.wasm", force_download=False
         )
 
-    def test_force_download_propagated(self) -> None:
+    def test_force_download_propagated(self, tmp_path: Path) -> None:
         """force_download=True is forwarded to resolve_uri."""
+        wasm_file = tmp_path / "codec.wasm"
+        sig = {
+            "inputs": {
+                "bytes": {"type": "bytes", "required": True},
+                "level": {"type": "int", "required": False, "encode_only": True},
+            },
+            "outputs": {"bytes": {"type": "bytes"}},
+        }
+        wasm_file.write_bytes(_wasm_with_signature(sig))
+
         pipeline = Pipeline.parse(_make_simple_pipeline())
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri", return_value=Path("/fake.wasm")
-            ) as mock_resolve,
-            patch(
-                "chonkle.executor._call_component",
-                return_value=[("bytes", b"out")],
-            ),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction, force_download=True)
+        with patch(
+            "chonkle.executor.resolve_uri", return_value=wasm_file
+        ) as mock_resolve:
+            prepare(pipeline, pipeline.direction, force_download=True)
 
         mock_resolve.assert_called_once_with("file:///fake.wasm", force_download=True)
 
@@ -458,7 +475,7 @@ class TestSignatureValidation:
             step_outputs = ["bytes"]
         step: dict = {
             "codec_id": "some-codec",
-            "src": f"file:///{wasm_file}",
+            "src": f"file://{wasm_file}",
             "inputs": step_inputs,
             "outputs": list(step_outputs),
         }
@@ -495,11 +512,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file, step_outputs=["bytes"])
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="not valid signature outputs"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="not valid signature outputs"):
+            prepare(pipeline, pipeline.direction)
 
     def test_matching_signature_does_not_raise(self, tmp_path: Path) -> None:
         """A signature matching declared ports does not raise."""
@@ -518,13 +532,8 @@ class TestSignatureValidation:
             step_outputs=["bytes"],
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
     def test_signature_unknown_input_raises(self, tmp_path: Path) -> None:
         """A step wiring a port not in the signature inputs raises ValueError."""
@@ -534,18 +543,14 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        # Step wires "wrong" which is not in signature inputs
         pipeline = self._make_pipeline(
             wasm_file,
             step_inputs={"wrong": "input.bytes"},
             step_outputs=["bytes"],
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="not valid signature encode inputs"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="not valid signature encode inputs"):
+            prepare(pipeline, pipeline.direction)
 
     def test_signature_encode_only_excluded_during_decode(self, tmp_path: Path) -> None:
         """encode_only inputs are excluded from valid decode inputs; no raise."""
@@ -558,7 +563,6 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        # Step wires "level" but marks it as encode_only; decode direction skips it
         pipeline = self._make_pipeline(
             wasm_file,
             direction="decode",
@@ -567,13 +571,8 @@ class TestSignatureValidation:
             encode_only_inputs=["level"],
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
     def test_signature_subset_output_passes(self, tmp_path: Path) -> None:
         """Declaring fewer outputs than the signature advertises is valid."""
@@ -583,16 +582,10 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}, "checksum": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        # Step only declares "bytes", not "checksum"
         pipeline = self._make_pipeline(wasm_file, step_outputs=["bytes"])
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
     def test_signature_outputs_key_absent_skips_check(self, tmp_path: Path) -> None:
         """A signature with no 'outputs' key skips output validation."""
@@ -601,13 +594,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
     def test_signature_inputs_key_absent_skips_check(self, tmp_path: Path) -> None:
         """A signature with no 'inputs' key skips input validation."""
@@ -616,13 +604,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
     def test_signature_both_wrong_reports_both(self, tmp_path: Path) -> None:
         """When both inputs and outputs are wrong, the error reports both."""
@@ -638,13 +621,10 @@ class TestSignatureValidation:
             step_outputs=["bad_out"],
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(
-                ValueError, match="not valid signature encode inputs"
-            ) as exc_info,
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(
+            ValueError, match="not valid signature encode inputs"
+        ) as exc_info:
+            prepare(pipeline, pipeline.direction)
 
         assert "not valid signature outputs" in str(exc_info.value)
 
@@ -654,11 +634,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_CM_HEADER)
         pipeline = self._make_pipeline(wasm_file)
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="chonkle:signature"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="chonkle:signature"):
+            prepare(pipeline, pipeline.direction)
 
     def test_two_steps_both_wrong_reports_both(self, tmp_path: Path) -> None:
         """Signature errors from multiple steps are all reported in one exception."""
@@ -681,13 +658,13 @@ class TestSignatureValidation:
                 "steps": {
                     "step_a": {
                         "codec_id": "some-codec",
-                        "src": f"file:///{wasm_a}",
+                        "src": f"file://{wasm_a}",
                         "inputs": {"bad_a": "input.bytes"},
                         "outputs": ["bytes"],
                     },
                     "step_b": {
                         "codec_id": "some-codec",
-                        "src": f"file:///{wasm_b}",
+                        "src": f"file://{wasm_b}",
                         "inputs": {"bad_b": "step_a.bytes"},
                         "outputs": ["bytes"],
                     },
@@ -695,14 +672,8 @@ class TestSignatureValidation:
             }
         )
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path(uri.removeprefix("file:///")),
-            ),
-            pytest.raises(ValueError, match="step_a") as exc_info,
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="step_a") as exc_info:
+            prepare(pipeline, pipeline.direction)
 
         assert "step_b" in str(exc_info.value)
 
@@ -716,11 +687,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="missing required 'type' field"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="missing required 'type' field"):
+            prepare(pipeline, pipeline.direction)
 
     def test_signature_output_port_missing_type_raises(self, tmp_path: Path) -> None:
         """A signature output port without a 'type' field raises ValueError."""
@@ -732,11 +700,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="missing required 'type' field"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="missing required 'type' field"):
+            prepare(pipeline, pipeline.direction)
 
     def test_type_mismatch_pipeline_input_raises(self, tmp_path: Path) -> None:
         """Pipeline input type mismatch against codec signature raises ValueError."""
@@ -746,7 +711,6 @@ class TestSignatureValidation:
             "outputs": {"data": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        # Pipeline declares input "data" as type "int"; codec expects "bytes".
         pipeline = Pipeline.parse(
             {
                 "codec_id": "test",
@@ -757,7 +721,7 @@ class TestSignatureValidation:
                 "steps": {
                     "s": {
                         "codec_id": "some-codec",
-                        "src": f"file:///{wasm_file}",
+                        "src": f"file://{wasm_file}",
                         "inputs": {"data": "input.data"},
                         "outputs": ["data"],
                     }
@@ -765,11 +729,8 @@ class TestSignatureValidation:
             }
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="provides type"),
-        ):
-            run(pipeline, {"data": b"payload"}, pipeline.direction)
+        with pytest.raises(ValueError, match="provides type"):
+            prepare(pipeline, pipeline.direction)
 
     def test_type_mismatch_constant_raises(self, tmp_path: Path) -> None:
         """Constant type mismatch against codec signature raises ValueError."""
@@ -782,7 +743,6 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        # Constant "level" has type "int"; codec expects "bytes".
         pipeline = Pipeline.parse(
             {
                 "codec_id": "test",
@@ -793,7 +753,7 @@ class TestSignatureValidation:
                 "steps": {
                     "s": {
                         "codec_id": "some-codec",
-                        "src": f"file:///{wasm_file}",
+                        "src": f"file://{wasm_file}",
                         "inputs": {"bytes": "input.bytes", "level": "constant.level"},
                         "outputs": ["bytes"],
                     }
@@ -801,11 +761,8 @@ class TestSignatureValidation:
             }
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            pytest.raises(ValueError, match="provides type"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="provides type"):
+            prepare(pipeline, pipeline.direction)
 
     def test_type_mismatch_step_output_raises(self, tmp_path: Path) -> None:
         """Step output type mismatch against downstream codec input raises."""
@@ -814,7 +771,6 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         sig_b = {
-            # Expects "int" but step_a outputs "bytes".
             "inputs": {"bytes": {"type": "int", "required": True}},
             "outputs": {"bytes": {"type": "int"}},
         }
@@ -833,13 +789,13 @@ class TestSignatureValidation:
                 "steps": {
                     "step_a": {
                         "codec_id": "codec-a",
-                        "src": f"file:///{wasm_a}",
+                        "src": f"file://{wasm_a}",
                         "inputs": {"bytes": "input.bytes"},
                         "outputs": ["bytes"],
                     },
                     "step_b": {
                         "codec_id": "codec-b",
-                        "src": f"file:///{wasm_b}",
+                        "src": f"file://{wasm_b}",
                         "inputs": {"bytes": "step_a.bytes"},
                         "outputs": ["bytes"],
                     },
@@ -847,14 +803,8 @@ class TestSignatureValidation:
             }
         )
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path(uri.removeprefix("file:///")),
-            ),
-            pytest.raises(ValueError, match="provides type"),
-        ):
-            run(pipeline, {"bytes": b"data"}, pipeline.direction)
+        with pytest.raises(ValueError, match="provides type"):
+            prepare(pipeline, pipeline.direction)
 
     def test_type_match_passes(self, tmp_path: Path) -> None:
         """Matching types across pipeline input and codec signature do not raise."""
@@ -866,13 +816,8 @@ class TestSignatureValidation:
         wasm_file.write_bytes(_wasm_with_signature(signature))
         pipeline = self._make_pipeline(wasm_file)
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
     def test_missing_type_in_source_skips_check(self, tmp_path: Path) -> None:
         """Pipeline input with no 'type' key skips type check without raising."""
@@ -882,7 +827,6 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        # Pipeline input descriptor has no "type" key.
         pipeline = Pipeline.parse(
             {
                 "codec_id": "test",
@@ -893,7 +837,7 @@ class TestSignatureValidation:
                 "steps": {
                     "s": {
                         "codec_id": "some-codec",
-                        "src": f"file:///{wasm_file}",
+                        "src": f"file://{wasm_file}",
                         "inputs": {"bytes": "input.bytes"},
                         "outputs": ["bytes"],
                     }
@@ -901,37 +845,25 @@ class TestSignatureValidation:
             }
         )
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=wasm_file),
-            patch("chonkle.executor._call_component", return_value=[("bytes", b"out")]),
-        ):
-            result = run(pipeline, {"bytes": b"data"}, pipeline.direction)
-
-        assert result == {"bytes": b"out"}
+        prepared = prepare(pipeline, pipeline.direction)
+        assert "s" in prepared.codecs
 
 
 class TestInvertedExecution:
     """Verify inverted DAG execution (direction != pipeline.direction)."""
-
-    @pytest.fixture(autouse=True)
-    def _skip_signature_validation(self):
-        with patch("chonkle.executor._validate_signature"):
-            yield
 
     def test_inverted_single_step_calls_encode(self) -> None:
         """A decode-declared pipeline run as encode calls encode on the codec."""
         pipeline = Pipeline.parse(_make_decode_pipeline())
         received_directions: list[str] = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received_directions.append(direction)
             return [("bytes", b"raw")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/fake.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            run(pipeline, {"bytes": b"compressed"}, "encode")
+        codecs = {"codec": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        run(prepared, {"bytes": b"compressed"})
 
         assert received_directions == ["encode"]
 
@@ -940,40 +872,29 @@ class TestInvertedExecution:
         pipeline = Pipeline.parse(_make_decode_pipeline())
         received_port_maps: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received_port_maps.append(list(port_map))
             return [("bytes", b"raw")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/fake.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            run(pipeline, {"bytes": b"compressed"}, "encode")
+        codecs = {"codec": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        run(prepared, {"bytes": b"compressed"})
 
         assert len(received_port_maps) == 1
         pm = dict(received_port_maps[0])
-        # "bytes" is the step's output port name — it becomes the encode input
         assert "bytes" in pm
         assert pm["bytes"] == b"compressed"
-        # "level" is encode_only, included in encode direction
         assert "level" in pm
         assert pm["level"] == b"3"
 
     def test_inverted_result_keyed_by_pipeline_inputs(self) -> None:
         """Inverted encode: result is keyed by pipeline.inputs names."""
         pipeline = Pipeline.parse(_make_decode_pipeline())
-
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/fake.wasm")),
-            patch(
-                "chonkle.executor._call_component",
-                return_value=[("bytes", b"encoded_result")],
-            ),
-        ):
-            result = run(pipeline, {"bytes": b"raw"}, "encode")
-
-        # pipeline.inputs has key "bytes"; pipeline.outputs also has key "bytes"
-        # but the inverted result comes from value_store["input.bytes"]
+        codecs = {
+            "codec": _FakeCodec(call_fn=lambda d, pm: [("bytes", b"encoded_result")])
+        }
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        result = run(prepared, {"bytes": b"raw"})
         assert result == {"bytes": b"encoded_result"}
 
     def test_inverted_execution_order_reversed(self) -> None:
@@ -1002,21 +923,22 @@ class TestInvertedExecution:
         pipeline = Pipeline.parse(data)
         call_order: list[str] = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
-            call_order.append(wasm_path.name)
+        def fake_a(direction, port_map):
+            call_order.append("a")
             return [("bytes", b"result")]
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path("/" + uri.removeprefix("file:///")),
-            ),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            run(pipeline, {"bytes": b"raw"}, "encode")
+        def fake_b(direction, port_map):
+            call_order.append("b")
+            return [("bytes", b"result")]
 
-        # Decode order is [step_a, step_b]; encode (inverted) order is [step_b, step_a]
-        assert call_order == ["b.wasm", "a.wasm"]
+        codecs = {
+            "step_a": _FakeCodec(call_fn=fake_a),
+            "step_b": _FakeCodec(call_fn=fake_b),
+        }
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        run(prepared, {"bytes": b"raw"})
+
+        assert call_order == ["b", "a"]
 
     def test_inverted_encode_routes_results_backward(self) -> None:
         """Inverted encode: step results route via decode-direction input wiring."""
@@ -1044,26 +966,23 @@ class TestInvertedExecution:
         pipeline = Pipeline.parse(data)
         received: dict[str, list] = {}
 
-        def fake_call(_engine, wasm_path, direction, port_map):
-            received[wasm_path.name] = list(port_map)
-            if wasm_path.name == "b.wasm":
-                return [("bytes", b"b_encoded")]
+        def fake_a(direction, port_map):
+            received["a"] = list(port_map)
             return [("bytes", b"a_encoded")]
 
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path("/" + uri.removeprefix("file:///")),
-            ),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            result = run(pipeline, {"bytes": b"raw_input"}, "encode")
+        def fake_b(direction, port_map):
+            received["b"] = list(port_map)
+            return [("bytes", b"b_encoded")]
 
-        # step_b encode receives the seeded value (pipeline.outputs["bytes"])
-        assert dict(received["b.wasm"]) == {"bytes": b"raw_input"}
-        # step_a encode receives what step_b returned (step_b.inputs["bytes"])
-        assert dict(received["a.wasm"]) == {"bytes": b"b_encoded"}
-        # final result is from value_store["input.bytes"] — what step_a returned
+        codecs = {
+            "step_a": _FakeCodec(call_fn=fake_a),
+            "step_b": _FakeCodec(call_fn=fake_b),
+        }
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        result = run(prepared, {"bytes": b"raw_input"})
+
+        assert dict(received["b"]) == {"bytes": b"raw_input"}
+        assert dict(received["a"]) == {"bytes": b"b_encoded"}
         assert result == {"bytes": b"a_encoded"}
 
     def test_inverted_fan_in_page_split_pattern(self) -> None:
@@ -1106,42 +1025,29 @@ class TestInvertedExecution:
             },
         }
         pipeline = Pipeline.parse(data)
-        received: dict[str, list] = {}
-        call_count: dict[str, int] = {}
 
-        def fake_call(_engine, wasm_path, direction, port_map):
-            name = wasm_path.name
-            call_count[name] = call_count.get(name, 0) + 1
-            key = f"{name}_{call_count[name]}"
-            received[key] = list(port_map)
-            if name == "split.wasm":
-                # page_split encode combines three inputs into one
-                pm = dict(port_map)
-                combined = (
-                    pm.get("rep_levels", b"")
-                    + pm.get("def_levels", b"")
-                    + pm.get("data", b"")
-                )
-                return [("bytes", combined)]
-            # identity encode: pass through
-            return port_map
-
-        with (
-            patch(
-                "chonkle.executor.resolve_uri",
-                side_effect=lambda uri, **kw: Path("/" + uri.removeprefix("file:///")),
-            ),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            result = run(
-                pipeline,
-                {"rep": b"RRR", "def_": b"DDD", "data": b"VVV"},
-                "encode",
+        def fake_split(direction, port_map):
+            pm = dict(port_map)
+            combined = (
+                pm.get("rep_levels", b"")
+                + pm.get("def_levels", b"")
+                + pm.get("data", b"")
             )
+            return [("bytes", combined)]
 
-        # Result is keyed by pipeline.inputs name ("bytes")
+        codecs = {
+            "page_split": _FakeCodec(call_fn=fake_split),
+            "identity_rep": _FakeCodec(call_fn=lambda d, pm: pm),
+            "identity_def": _FakeCodec(call_fn=lambda d, pm: pm),
+            "identity_data": _FakeCodec(call_fn=lambda d, pm: pm),
+        }
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        result = run(
+            prepared,
+            {"rep": b"RRR", "def_": b"DDD", "data": b"VVV"},
+        )
+
         assert "bytes" in result
-        # Combined output should contain all three segments
         assert b"RRR" in result["bytes"]
         assert b"DDD" in result["bytes"]
         assert b"VVV" in result["bytes"]
@@ -1149,9 +1055,9 @@ class TestInvertedExecution:
     def test_inverted_missing_input_raises(self) -> None:
         """Inverted direction with a missing pipeline.outputs key raises ValueError."""
         pipeline = Pipeline.parse(_make_decode_pipeline())
-        # pipeline.outputs has key "bytes"; caller must provide it
+        prepared = _prepared(pipeline, direction="encode")
         with pytest.raises(ValueError, match="Missing pipeline input"):
-            run(pipeline, {}, "encode")
+            run(prepared, {})
 
     def test_inverted_encode_only_excluded_from_decode_call(self) -> None:
         """Encode-declared pipeline inverted to decode: encode_only_inputs absent."""
@@ -1174,16 +1080,13 @@ class TestInvertedExecution:
         pipeline = Pipeline.parse(data)
         received_port_maps: list = []
 
-        def fake_call(_engine, wasm_path, direction, port_map):
+        def fake_call(direction, port_map):
             received_port_maps.append(list(port_map))
             return [("bytes", b"decoded")]
 
-        with (
-            patch("chonkle.executor.resolve_uri", return_value=Path("/s.wasm")),
-            patch("chonkle.executor._call_component", side_effect=fake_call),
-        ):
-            # Invert encode-declared pipeline to decode direction
-            run(pipeline, {"bytes": b"encoded"}, "decode")
+        codecs = {"s": _FakeCodec(call_fn=fake_call)}
+        prepared = _prepared(pipeline, direction="decode", codecs=codecs)
+        run(prepared, {"bytes": b"encoded"})
 
         assert len(received_port_maps) == 1
         port_names = [name for name, _ in received_port_maps[0]]
@@ -1201,12 +1104,12 @@ class TestPageSplitFanOut:
         """page-split produces three non-empty output byte buffers."""
         data, rep_length, def_length = page_split_input
 
-        # Override constants in the fixture with test-specific values.
         page_split_pipeline_json["constants"]["rep_length"]["value"] = rep_length
         page_split_pipeline_json["constants"]["def_length"]["value"] = def_length
 
         pipeline = Pipeline.parse(page_split_pipeline_json)
-        result = run(pipeline, {"bytes": data}, pipeline.direction)
+        prepared = prepare(pipeline, pipeline.direction)
+        result = run(prepared, {"bytes": data})
 
         assert set(result.keys()) == {"rep_levels", "def_levels", "data"}
         for port_name, value in result.items():
@@ -1224,7 +1127,8 @@ class TestPageSplitFanOut:
         page_split_pipeline_json["constants"]["def_length"]["value"] = def_length
 
         pipeline = Pipeline.parse(page_split_pipeline_json)
-        result = run(pipeline, {"bytes": data}, pipeline.direction)
+        prepared = prepare(pipeline, pipeline.direction)
+        result = run(prepared, {"bytes": data})
 
         assert len(result["rep_levels"]) == rep_length
         assert len(result["def_levels"]) == def_length
@@ -1242,7 +1146,8 @@ class TestCogChunkPipeline:
     ) -> None:
         """Decode-declared pipeline forward decode: output is 1024x1024x2 bytes."""
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        prepared = prepare(pipeline, "decode")
+        result = run(prepared, {"bytes": cog_chunk})
         assert len(result["bytes"]) == self._TILE_BYTES
 
     def test_decode_declared_forward_decode_output_is_bytes(
@@ -1250,7 +1155,8 @@ class TestCogChunkPipeline:
     ) -> None:
         """Decode-declared pipeline running forward decode returns a bytes object."""
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        prepared = prepare(pipeline, "decode")
+        result = run(prepared, {"bytes": cog_chunk})
         assert isinstance(result["bytes"], bytes)
 
     def test_encode_declared_inverted_decode_output_size(
@@ -1258,7 +1164,8 @@ class TestCogChunkPipeline:
     ) -> None:
         """Encode-declared pipeline inverted decode: output is 1024x1024x2 bytes."""
         pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        prepared = prepare(pipeline, "decode")
+        result = run(prepared, {"bytes": cog_chunk})
         assert len(result["bytes"]) == self._TILE_BYTES
 
     def test_encode_declared_inverted_decode_output_is_bytes(
@@ -1266,39 +1173,36 @@ class TestCogChunkPipeline:
     ) -> None:
         """Encode-declared pipeline running inverted decode returns a bytes object."""
         pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        result = run(pipeline, {"bytes": cog_chunk}, "decode")
+        prepared = prepare(pipeline, "decode")
+        result = run(prepared, {"bytes": cog_chunk})
         assert isinstance(result["bytes"], bytes)
 
     def test_decode_declared_pipeline_roundtrip(
         self, raw_chunk: bytes, cog_decode_pipeline_json: dict
     ) -> None:
-        """Decode-declared pipeline roundtrip: inverted encode then forward decode.
-
-        raw_chunk is padded to 1024x1024x2 bytes so tiff-predictor-2 can
-        interpret it as a full tile (width=1024, bytes_per_sample=2).
-        """
+        """Decode-declared pipeline roundtrip: inverted encode then forward decode."""
         tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
             : self._TILE_BYTES
         ]
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        encoded = run(pipeline, {"bytes": tile}, "encode")
-        decoded = run(pipeline, {"bytes": encoded["bytes"]}, "decode")
+        enc_prepared = prepare(pipeline, "encode")
+        encoded = run(enc_prepared, {"bytes": tile})
+        dec_prepared = prepare(pipeline, "decode")
+        decoded = run(dec_prepared, {"bytes": encoded["bytes"]})
         assert decoded["bytes"] == tile
 
     def test_encode_declared_pipeline_roundtrip(
         self, raw_chunk: bytes, cog_encode_pipeline_json: dict
     ) -> None:
-        """Encode-declared pipeline roundtrip: forward encode then inverted decode.
-
-        raw_chunk is padded to 1024x1024x2 bytes so tiff-predictor-2 can
-        interpret it as a full tile (width=1024, bytes_per_sample=2).
-        """
+        """Encode-declared pipeline roundtrip: forward encode then inverted decode."""
         tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
             : self._TILE_BYTES
         ]
         pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        encoded = run(pipeline, {"bytes": tile}, "encode")
-        decoded = run(pipeline, {"bytes": encoded["bytes"]}, "decode")
+        enc_prepared = prepare(pipeline, "encode")
+        encoded = run(enc_prepared, {"bytes": tile})
+        dec_prepared = prepare(pipeline, "decode")
+        decoded = run(dec_prepared, {"bytes": encoded["bytes"]})
         assert decoded["bytes"] == tile
 
     def test_encode_declared_inverted_decode_matches_decode_declared_forward(
@@ -1311,8 +1215,10 @@ class TestCogChunkPipeline:
         as decode-declared pipeline forward decode."""
         decode_pipeline = Pipeline.parse(cog_decode_pipeline_json)
         encode_pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        forward = run(decode_pipeline, {"bytes": cog_chunk}, "decode")
-        inverted = run(encode_pipeline, {"bytes": cog_chunk}, "decode")
+        fwd = prepare(decode_pipeline, "decode")
+        inv = prepare(encode_pipeline, "decode")
+        forward = run(fwd, {"bytes": cog_chunk})
+        inverted = run(inv, {"bytes": cog_chunk})
         assert inverted["bytes"] == forward["bytes"]
 
     def test_decode_declared_inverted_encode_matches_encode_declared_forward(
@@ -1328,6 +1234,8 @@ class TestCogChunkPipeline:
         ]
         decode_pipeline = Pipeline.parse(cog_decode_pipeline_json)
         encode_pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        inverted = run(decode_pipeline, {"bytes": tile}, "encode")
-        forward = run(encode_pipeline, {"bytes": tile}, "encode")
+        inv = prepare(decode_pipeline, "encode")
+        fwd = prepare(encode_pipeline, "encode")
+        inverted = run(inv, {"bytes": tile})
+        forward = run(fwd, {"bytes": tile})
         assert inverted["bytes"] == forward["bytes"]

@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from chonkle.executor import run
+from chonkle.executor import prepare, run
 from chonkle.pipeline import Pipeline
 
 
@@ -76,7 +76,8 @@ def _run_command(args: argparse.Namespace) -> None:
         inputs[name] = Path(path).read_bytes()
 
     direction = args.direction if args.direction is not None else pipeline.direction
-    result = run(pipeline, inputs, direction, force_download=args.force_download)
+    prepared = prepare(pipeline, direction, force_download=args.force_download)
+    result = run(prepared, inputs)
 
     requested_outputs: dict[str, str] = {}
     for spec in args.outputs:

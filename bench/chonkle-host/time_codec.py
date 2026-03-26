@@ -21,7 +21,7 @@ import logging
 import zlib
 from pathlib import Path
 
-from chonkle.executor import run
+from chonkle.executor import prepare, run
 from chonkle.pipeline import Pipeline
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -103,7 +103,8 @@ def _make_identity_pipeline() -> dict:
 def run_identity(data: bytes, label: str) -> bytes:
     print(f"\n--- identity: {label} ({len(data):,} bytes) ---")
     pipeline = Pipeline.parse(_make_identity_pipeline())
-    result = run(pipeline, {"bytes": data}, "decode")
+    prepared = prepare(pipeline, "decode")
+    result = run(prepared, {"bytes": data})
     return result["bytes"]
 
 
@@ -130,21 +131,24 @@ def _make_zlib_encode_pipeline() -> dict:
 def run_zlib(data: bytes, label: str) -> bytes:
     print(f"\n--- zlib decode: {label} ({len(data):,} bytes compressed) ---")
     pipeline = Pipeline.parse(_make_zlib_only_pipeline())
-    result = run(pipeline, {"bytes": data}, "decode")
+    prepared = prepare(pipeline, "decode")
+    result = run(prepared, {"bytes": data})
     return result["bytes"]
 
 
 def run_zlib_encode(data: bytes, label: str) -> bytes:
     print(f"\n--- zlib encode: {label} ({len(data):,} bytes raw) ---")
     pipeline = Pipeline.parse(_make_zlib_encode_pipeline())
-    result = run(pipeline, {"bytes": data}, "encode")
+    prepared = prepare(pipeline, "encode")
+    result = run(prepared, {"bytes": data})
     return result["bytes"]
 
 
 def run_pred2(data: bytes, width: int, label: str) -> bytes:
     print(f"\n--- predictor2 decode: {label} ({len(data):,} bytes) width={width} ---")
     pipeline = Pipeline.parse(_make_pred2_only_pipeline(width))
-    result = run(pipeline, {"bytes": data}, "decode")
+    prepared = prepare(pipeline, "decode")
+    result = run(prepared, {"bytes": data})
     return result["bytes"]
 
 
