@@ -18,14 +18,10 @@ from typing import Any
 
 import wasmtime
 
-from chonkle.codecs import (
-    SIGNATURES_DIR,
-    Codec,
-    ComponentCodec,
-    CoreWasmCodec,
-    NativeCodec,
-    detect_codec_type,
-)
+from chonkle.codecs._base import SIGNATURES_DIR, Codec, detect_codec_type
+from chonkle.codecs.component import ComponentCodec
+from chonkle.codecs.core import CoreWasmCodec
+from chonkle.codecs.native import NativeCodec
 from chonkle.wasm_signature import read_signature
 
 

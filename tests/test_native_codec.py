@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from chonkle.codecs import Codec, NativeCodec, PortMap
+from chonkle.codecs._base import Codec, PortMap
+from chonkle.codecs.native import NativeCodec
 from chonkle.executor import PreparedPipeline, run
 from chonkle.pipeline import Direction, Pipeline
 from chonkle.resolver import Resolver

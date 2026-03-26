@@ -6,7 +6,8 @@ from typing import Any
 
 import pytest
 
-from chonkle.codecs import Codec, CoreWasmCodec, CoreWasmRef, PortMap
+from chonkle.codecs._base import Codec, PortMap
+from chonkle.codecs.core import CoreWasmCodec, CoreWasmRef
 from chonkle.executor import PreparedPipeline, prepare, run
 from chonkle.pipeline import Direction, Pipeline
 from chonkle.resolver import Resolver

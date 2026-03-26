@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from chonkle.codecs import Codec, CoreWasmCodec, CoreWasmRef, OutputPortMap
+from chonkle.codecs._base import Codec
+from chonkle.codecs.core import CoreWasmCodec, CoreWasmRef, OutputPortMap
 from chonkle.pipeline import Direction, Pipeline, StepSpec, WiringRef
 from chonkle.resolver import Resolver
 

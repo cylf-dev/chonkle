@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from chonkle.codecs import _deserialize_port_map, _serialize_port_map, detect_codec_type
+from chonkle.codecs._base import detect_codec_type
+from chonkle.codecs.core import _deserialize_port_map, _serialize_port_map
 
 # Wasm magic + version headers.
 _CORE_HEADER = b"\x00asm\x01\x00\x00\x00"
