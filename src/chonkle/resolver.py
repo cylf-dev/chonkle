@@ -17,7 +17,7 @@ from typing import Any
 
 import wasmtime
 
-from chonkle.codecs import Codec, ComponentCodec, detect_codec_type
+from chonkle.codecs import Codec, ComponentCodec, CoreWasmCodec, detect_codec_type
 from chonkle.wasm_signature import read_signature
 
 
@@ -170,14 +170,12 @@ class Resolver:
         codec_type = detect_codec_type(wasm_path)
         if codec_type == "component":
             return ComponentCodec(self._engine, wasm_path)
-        msg = f"Core Wasm codecs are not yet supported: {wasm_path}"
-        raise ValueError(msg)
+        return CoreWasmCodec(self._engine, wasm_path)
 
     def _instantiate(self, entry: CodecEntry) -> Codec:
         if entry.codec_type == "component":
             return ComponentCodec(self._engine, entry.path)
-        msg = f"Core Wasm codecs are not yet supported: {entry.path}"
-        raise ValueError(msg)
+        return CoreWasmCodec(self._engine, entry.path)
 
     def _resolve_from_source(self, codec_id: str, uri: str) -> Codec:
         from chonkle.wasm_download import resolve_uri

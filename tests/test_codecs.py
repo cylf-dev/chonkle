@@ -1,10 +1,11 @@
 """Tests for codec wrapper classes and binary detection."""
 
+import struct
 from pathlib import Path
 
 import pytest
 
-from chonkle.codecs import detect_codec_type
+from chonkle.codecs import _deserialize_port_map, _serialize_port_map, detect_codec_type
 
 # Wasm magic + version headers.
 _CORE_HEADER = b"\x00asm\x01\x00\x00\x00"
@@ -39,3 +40,42 @@ class TestDetectCodecType:
         wasm.write_bytes(b"\x00asm\xff\x00\x00\x00")
         with pytest.raises(ValueError, match="Unknown Wasm version"):
             detect_codec_type(wasm)
+
+
+class TestPortMapSerialization:
+    """Tests for the core ABI port-map wire format serialization."""
+
+    def test_roundtrip_single_port(self) -> None:
+        port_map = [("bytes", b"\xde\xad\xbe\xef")]
+        assert _deserialize_port_map(_serialize_port_map(port_map)) == port_map
+
+    def test_roundtrip_multiple_ports(self) -> None:
+        port_map = [("bytes", b"hello"), ("level", b"3")]
+        assert _deserialize_port_map(_serialize_port_map(port_map)) == port_map
+
+    def test_roundtrip_empty_port_map(self) -> None:
+        port_map: list[tuple[str, bytes]] = []
+        assert _deserialize_port_map(_serialize_port_map(port_map)) == port_map
+
+    def test_roundtrip_empty_data(self) -> None:
+        port_map = [("empty", b"")]
+        assert _deserialize_port_map(_serialize_port_map(port_map)) == port_map
+
+    def test_wire_format_structure(self) -> None:
+        """Verify the wire format matches the spec (little-endian u32 lengths)."""
+        port_map = [("bytes", b"\xde\xad")]
+        raw = _serialize_port_map(port_map)
+        # u32 entry_count=1, u32 name_len=5, "bytes", u32 data_len=2, 0xDE 0xAD
+        assert struct.unpack_from("<I", raw, 0)[0] == 1  # entry_count
+        assert struct.unpack_from("<I", raw, 4)[0] == 5  # name_len
+        assert raw[8:13] == b"bytes"
+        assert struct.unpack_from("<I", raw, 13)[0] == 2  # data_len
+        assert raw[17:19] == b"\xde\xad"
+        assert len(raw) == 19
+
+    def test_roundtrip_large_data(self) -> None:
+        data = bytes(range(256)) * 1024  # 256 KB
+        port_map = [("bytes", data)]
+        result = _deserialize_port_map(_serialize_port_map(port_map))
+        assert result[0][0] == "bytes"
+        assert result[0][1] == data

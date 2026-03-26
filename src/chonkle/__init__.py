@@ -1,6 +1,12 @@
 """Wasm codec pipeline library."""
 
-from chonkle.codecs import Codec, ComponentCodec, PortMap, detect_codec_type
+from chonkle.codecs import (
+    Codec,
+    ComponentCodec,
+    CoreWasmCodec,
+    PortMap,
+    detect_codec_type,
+)
 from chonkle.executor import PreparedPipeline, prepare, run
 from chonkle.pipeline import Direction, Pipeline, StepSpec
 from chonkle.resolver import CodecEntry, Resolver
@@ -10,6 +16,7 @@ __all__ = [
     "Codec",
     "CodecEntry",
     "ComponentCodec",
+    "CoreWasmCodec",
     "Direction",
     "Pipeline",
     "PortMap",

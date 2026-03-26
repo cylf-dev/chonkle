@@ -7,6 +7,7 @@ know which backend is in use.
 
 from __future__ import annotations
 
+import struct
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,136 @@ class ComponentCodec(Codec):
             raise RuntimeError(msg)
 
         return [(str(name), bytes(data)) for name, data in result]
+
+
+def _require_export[T](
+    exports: Any, name: str, expected_type: type[T], wasm_path: Path
+) -> T:
+    """Get a named export and verify its type, raising on mismatch."""
+    val = exports[name]
+    if not isinstance(val, expected_type):
+        msg = (
+            f"Core wasm module at {wasm_path}: export {name!r} "
+            f"is {type(val).__name__}, expected {expected_type.__name__}"
+        )
+        raise RuntimeError(msg)
+    return val
+
+
+class CoreWasmCodec(Codec):
+    """Wraps a Core Wasm codec implementing the core port-map ABI.
+
+    Instantiates a core wasm32-wasi reactor module and calls
+    ``encode``/``decode`` using the binary port-map wire format via
+    ``Memory.read``/``Memory.write``. The module instance is kept alive
+    for the duration of the codec's lifetime to support single-copy
+    transfer in a future phase.
+
+    Required module exports: ``memory``, ``alloc``, ``dealloc``,
+    ``encode``, ``decode``.
+    """
+
+    def __init__(self, engine: wasmtime.Engine, wasm_path: Path) -> None:
+        self._engine = engine
+        self._wasm_path = wasm_path
+        self._sig = read_signature(wasm_path)
+
+        module = wasmtime.Module.from_file(engine, str(wasm_path))
+        self._store = wasmtime.Store(engine)
+        self._store.set_wasi(wasmtime.WasiConfig())
+        linker = wasmtime.Linker(engine)
+        linker.define_wasi()
+        instance = linker.instantiate(self._store, module)
+
+        exports = instance.exports(self._store)
+        self._memory = _require_export(exports, "memory", wasmtime.Memory, wasm_path)
+        self._alloc_fn = _require_export(exports, "alloc", wasmtime.Func, wasm_path)
+        self._dealloc_fn = _require_export(exports, "dealloc", wasmtime.Func, wasm_path)
+        self._encode_fn = _require_export(exports, "encode", wasmtime.Func, wasm_path)
+        self._decode_fn = _require_export(exports, "decode", wasmtime.Func, wasm_path)
+
+    @property
+    def codec_type(self) -> str:
+        return "core"
+
+    @property
+    def codec_id(self) -> str:
+        return self._sig.get("codec_id", "")
+
+    @property
+    def implementation(self) -> str:
+        return self._sig.get("implementation", "")
+
+    def signature(self) -> dict[str, Any]:
+        return self._sig
+
+    @property
+    def memory(self) -> wasmtime.Memory:
+        """The module's linear memory (exposed for single-copy transfer)."""
+        return self._memory
+
+    @property
+    def store(self) -> wasmtime.Store:
+        """The Wasmtime store bound to this instance."""
+        return self._store
+
+    def call(self, direction: Direction, port_map: PortMap) -> PortMap:
+        """Call encode or decode using the core port-map ABI."""
+        fn = self._encode_fn if direction == "encode" else self._decode_fn
+
+        input_bytes = _serialize_port_map(port_map)
+        input_ptr = self._alloc_fn(self._store, len(input_bytes))
+        if input_ptr == 0:
+            msg = f"Core wasm alloc returned null for {len(input_bytes)} bytes"
+            raise RuntimeError(msg)
+        self._memory.write(self._store, input_bytes, input_ptr)
+
+        result = fn(self._store, input_ptr, len(input_bytes))
+
+        output_ptr = (result >> 32) & 0xFFFFFFFF
+        output_len = result & 0xFFFFFFFF
+
+        if output_ptr == 0 and output_len == 0:
+            msg = f"Core wasm codec {direction} returned error"
+            raise RuntimeError(msg)
+
+        output_bytes = bytes(
+            self._memory.read(self._store, output_ptr, output_ptr + output_len)
+        )
+        self._dealloc_fn(self._store, output_ptr, output_len)
+
+        return _deserialize_port_map(output_bytes)
+
+
+def _serialize_port_map(port_map: PortMap) -> bytes:
+    """Serialize a port-map to the core ABI wire format."""
+    parts = [struct.pack("<I", len(port_map))]
+    for name, data in port_map:
+        name_bytes = name.encode("utf-8")
+        parts.append(struct.pack("<I", len(name_bytes)))
+        parts.append(name_bytes)
+        parts.append(struct.pack("<I", len(data)))
+        parts.append(data)
+    return b"".join(parts)
+
+
+def _deserialize_port_map(data: bytes) -> PortMap:
+    """Deserialize a port-map from the core ABI wire format."""
+    offset = 0
+    (entry_count,) = struct.unpack_from("<I", data, offset)
+    offset += 4
+    result: PortMap = []
+    for _ in range(entry_count):
+        (name_len,) = struct.unpack_from("<I", data, offset)
+        offset += 4
+        name = data[offset : offset + name_len].decode("utf-8")
+        offset += name_len
+        (data_len,) = struct.unpack_from("<I", data, offset)
+        offset += 4
+        port_data = data[offset : offset + data_len]
+        offset += data_len
+        result.append((name, bytes(port_data)))
+    return result
 
 
 def detect_codec_type(wasm_path: Path) -> str:

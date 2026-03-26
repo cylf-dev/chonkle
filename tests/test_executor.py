@@ -79,6 +79,14 @@ CODEC_REQUIRED = pytest.mark.skipif(
     reason="requires compiled codec .wasm files (built in a separate session)",
 )
 
+_CORE_IDENTITY_WASM = _CODEC_DIR / "identity-core-c" / "zig-out" / "identity-core.wasm"
+CORE_CODEC_REQUIRED = pytest.mark.skipif(
+    not _CORE_IDENTITY_WASM.exists(),
+    reason=(
+        "Core identity codec .wasm not present — build codec/identity-core-c first"
+    ),
+)
+
 _COG_WASM_ZLIB = _CODEC_DIR / "zlib-rs" / "zlib.wasm"
 _COG_WASM_PREDICTOR2 = _CODEC_DIR / "tiff-predictor-2-c" / "tiff-predictor-2.wasm"
 COG_CODECS_REQUIRED = pytest.mark.skipif(
@@ -1168,6 +1176,112 @@ class TestPageSplitFanOut:
         assert len(result["rep_levels"]) == rep_length
         assert len(result["def_levels"]) == def_length
         assert len(result["data"]) == len(data) - rep_length - def_length
+
+
+@CORE_CODEC_REQUIRED
+class TestCoreWasmPipeline:
+    """Tests for core wasm codec steps in DAG pipelines."""
+
+    def test_single_step_core_encode(self, raw_chunk: bytes) -> None:
+        """A single core wasm identity step produces identical output on encode."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "s.bytes"},
+                "steps": {
+                    "s": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    }
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "encode", resolver=resolver)
+        assert prepared.codecs["s"].codec_type == "core"
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk
+
+    def test_single_step_core_decode(self, raw_chunk: bytes) -> None:
+        """A single core wasm identity step produces identical output on decode."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "decode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "s.bytes"},
+                "steps": {
+                    "s": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    }
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "decode", resolver=resolver)
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk
+
+    def test_two_step_core_pipeline(self, raw_chunk: bytes) -> None:
+        """Two sequential core wasm identity steps route data correctly."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "step_b.bytes"},
+                "steps": {
+                    "step_a": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    },
+                    "step_b": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "step_a.bytes"},
+                    },
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "encode", resolver=resolver)
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk
+
+    def test_inverted_core_pipeline(self, raw_chunk: bytes) -> None:
+        """An inverted core wasm pipeline produces identical output."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "decode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "s.bytes"},
+                "steps": {
+                    "s": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    }
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "encode", resolver=resolver)
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk
+
+    def test_core_codec_resolver_detects_type(self) -> None:
+        """The resolver instantiates a CoreWasmCodec for core wasm binaries."""
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        codec = resolver.resolve("identity")
+        assert codec.codec_type == "core"
+        assert codec.codec_id == "identity"
+        assert codec.implementation == "identity-core-c"
 
 
 @COG_CODECS_REQUIRED
