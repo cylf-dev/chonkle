@@ -169,7 +169,10 @@ class TestNativePipeline:
         pipeline = Pipeline.parse(pipeline_dict)
         codec = NativeCodec("zlib")
         prepared = PreparedPipeline(
-            pipeline=pipeline, direction="encode", codecs={"compress": codec}
+            pipeline=pipeline,
+            direction="encode",
+            codecs={"compress": codec},
+            step_by_name={s.name: s for s in pipeline.steps},
         )
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
@@ -181,6 +184,7 @@ class TestNativePipeline:
             pipeline=pipeline_dec,
             direction="decode",
             codecs={"compress": NativeCodec("zlib")},
+            step_by_name={s.name: s for s in pipeline_dec.steps},
         )
         decoded = run(prepared_dec, {"bytes": result["bytes"]})
         assert decoded["bytes"] == data
@@ -212,6 +216,7 @@ class TestNativePipeline:
                 "step_a": NativeCodec("gzip"),
                 "step_b": NativeCodec("bz2"),
             },
+            step_by_name={s.name: s for s in pipeline.steps},
         )
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
@@ -238,7 +243,10 @@ class TestNativePipeline:
         pipeline = Pipeline.parse(pipeline_dict)
         codec = NativeCodec("zlib")
         prepared = PreparedPipeline(
-            pipeline=pipeline, direction="encode", codecs={"compress": codec}
+            pipeline=pipeline,
+            direction="encode",
+            codecs={"compress": codec},
+            step_by_name={s.name: s for s in pipeline.steps},
         )
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
@@ -271,6 +279,7 @@ class TestNativePipeline:
                 "step_a": NativeCodec("zlib"),
                 "step_b": _FakeCodec(call_fn=lambda d, pm: pm),
             },
+            step_by_name={s.name: s for s in pipeline.steps},
         )
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
@@ -306,6 +315,7 @@ class TestNativePipeline:
             pipeline=pipeline,
             direction="decode",
             codecs={"compress": NativeCodec("zlib")},
+            step_by_name={s.name: s for s in pipeline.steps},
         )
         result = run(prepared, {"bytes": encoded[0][1]})
         assert result["bytes"] == data

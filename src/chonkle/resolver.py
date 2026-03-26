@@ -19,7 +19,7 @@ from typing import Any
 import wasmtime
 
 from chonkle.codecs import (
-    _SIGNATURES_DIR,
+    SIGNATURES_DIR,
     Codec,
     ComponentCodec,
     CoreWasmCodec,
@@ -79,13 +79,13 @@ class Resolver:
         self,
         *,
         codec_store: Path | None = None,
-        preference: Sequence[str] = ("core", "component", "native"),
+        preference: Sequence[str] | None = None,
         overrides: dict[str, str] | None = None,
         pipeline_sources: dict[str, str] | None = None,
         paths: dict[str, Path] | None = None,
     ) -> None:
         self._store_path = codec_store or _default_store_path()
-        self._preference = list(preference)
+        self._preference = list(preference or ("core", "component", "native"))
         self._overrides = dict(overrides or {})
         self._pipeline_sources = dict(pipeline_sources or {})
         self._paths = dict(paths or {})
@@ -148,8 +148,8 @@ class Resolver:
         result: list[CodecEntry] = []
         for entries in self._get_index().values():
             result.extend(entries)
-        if _SIGNATURES_DIR.exists():
-            for sig_file in sorted(_SIGNATURES_DIR.glob("*.json")):
+        if SIGNATURES_DIR.exists():
+            for sig_file in sorted(SIGNATURES_DIR.glob("*.json")):
                 sig = json.loads(sig_file.read_text())
                 cid = sig.get("codec_id", sig_file.stem)
                 result.append(
@@ -189,28 +189,21 @@ class Resolver:
             return self._instantiate(entries[0])
         return NativeCodec(codec_id)
 
-    def _select_by_preference(self, entries: list[CodecEntry]) -> CodecEntry:
-        for pref in self._preference:
-            for entry in entries:
-                if entry.codec_type == pref:
-                    return entry
-        return entries[0]
-
     def _resolve_override(self, codec_id: str, impl_name: str) -> Codec:
         entries = self._get_index().get(codec_id, [])
         for entry in entries:
             if entry.implementation == impl_name:
                 return self._instantiate(entry)
         # Check native
-        if _has_native_signature(codec_id):
-            native_impl = json.loads(
-                (_SIGNATURES_DIR / f"{codec_id}.json").read_text()
-            ).get("implementation", "")
+        available = [e.implementation for e in entries]
+        sig_path = SIGNATURES_DIR / f"{codec_id}.json"
+        if sig_path.exists():
+            native_impl = json.loads(sig_path.read_text()).get(
+                "implementation", f"numcodecs.{codec_id}"
+            )
             if native_impl == impl_name:
                 return NativeCodec(codec_id)
-        available = [e.implementation for e in entries]
-        if _has_native_signature(codec_id):
-            available.append(f"numcodecs.{codec_id}")
+            available.append(native_impl)
         msg = (
             f"Override implementation {impl_name!r} for codec {codec_id!r} "
             f"not found. Available: {available}"
@@ -261,7 +254,7 @@ class Resolver:
 
 def _has_native_signature(codec_id: str) -> bool:
     """Check whether a native codec signature file exists for *codec_id*."""
-    return (_SIGNATURES_DIR / f"{codec_id}.json").exists()
+    return (SIGNATURES_DIR / f"{codec_id}.json").exists()
 
 
 def _scan_store(store_path: Path) -> dict[str, list[CodecEntry]]:

@@ -100,9 +100,7 @@ def main() -> None:
 
 def _build_resolver(args: argparse.Namespace, pipeline: Pipeline) -> Resolver:
     """Build a Resolver from CLI flags and pipeline sources."""
-    preference = (
-        args.preference.split(",") if args.preference else ("core", "component")
-    )
+    preference = args.preference.split(",") if args.preference else None
 
     overrides: dict[str, str] = {}
     for spec in args.overrides:

@@ -54,21 +54,23 @@ Core library. All public API is re-exported from `__init__.py`.
   Parses pipeline JSON into a `Pipeline` dataclass, validates all wiring
   references, and produces a topologically sorted `execution_order`.
   Key types: `Pipeline`, `StepSpec`, `WiringRef`.
-- **codecs.py** — Codec wrapper classes. `Codec` ABC with `call(direction,
-  port_map)` and `signature()`. `ComponentCodec` wraps a Component Model
-  component (Wasmtime instantiation, WIT function lookup, encode/decode call).
-  `CoreWasmCodec` wraps a core wasm32-wasi reactor module (binary port-map
-  serialization, `Memory.read`/`Memory.write`, `alloc`/`dealloc` calls).
-  `NativeCodec` wraps a numcodecs codec (lazy import, signature from bundled
-  JSON in `signatures/numcodecs/`, bytes and ndarray calling conventions via
-  `data_format`). `CoreWasmCodec.call()` returns `CoreWasmRef` entries (lazy
-  output parsing) and accepts them as input (single-copy via
-  `ctypes.memmove`). `detect_codec_type()` reads the wasm binary header to
-  route to the correct wrapper. Port-map wire format helpers:
-  `_serialize_port_map`, `_deserialize_port_map`,
-  `_deserialize_port_map_lazy`. Cross-module transfer:
-  `_copy_between_memories`, `_single_copy_transfer`. Key types: `Codec`,
-  `ComponentCodec`, `CoreWasmCodec`, `NativeCodec`, `CoreWasmRef`, `PortMap`.
+- **codecs/** — Codec wrapper package. `__init__.py` re-exports all public
+  names. Submodules:
+  - **codecs/_base.py** — `Codec` ABC with `call(direction, port_map)` and
+    `signature()`. `PortMap` type alias, `SIGNATURES_DIR`,
+    `CODEC_TRANSFORM_IFACE`, `detect_codec_type()`.
+  - **codecs/component.py** — `ComponentCodec`: wraps a Component Model
+    component. Caches `Component.from_file()` at init time.
+  - **codecs/core.py** — `CoreWasmCodec`: wraps a core wasm32-wasi reactor
+    module (binary port-map serialization, `alloc`/`dealloc` calls). Returns
+    `CoreWasmRef` entries (lazy output) and accepts them as input (single-copy
+    via `ctypes.memmove`). `close()` releases the store and linear memory.
+    `OutputPortMap` type alias. Port-map wire format helpers. Cross-module
+    transfer: `_copy_between_memories`, `_single_copy_transfer`.
+  - **codecs/native.py** — `NativeCodec`: wraps a numcodecs codec (lazy import,
+    signature from bundled JSON, bytes and ndarray calling conventions).
+  Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `NativeCodec`,
+  `CoreWasmRef`, `PortMap`, `OutputPortMap`.
 - **resolver.py** — Codec resolution and local store. `Resolver` maps
   codec_ids to `Codec` instances via: explicit paths → per-codec overrides →
   local store and native (selected by preference) → pipeline sources

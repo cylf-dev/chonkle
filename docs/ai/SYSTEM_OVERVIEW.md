@@ -15,7 +15,7 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
 
 - **Parsing**: `pipeline.py` parses JSON into a validated `Pipeline` dataclass
   with topologically sorted steps
-- **Codec wrapper classes** (`codecs.py`): `Codec` ABC normalizes different
+- **Codec wrapper classes** (`codecs/`): `Codec` ABC normalizes different
   backends. `ComponentCodec` wraps a Component Model component.
   `CoreWasmCodec` wraps a core wasm32-wasi reactor module using the binary
   port-map wire format. `NativeCodec` wraps a numcodecs codec object,
@@ -77,7 +77,7 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
 - **pipeline** (`pipeline.py`): parse pipeline JSON, validate wiring references,
   topological sort (Kahn's algorithm). Entry points: `parse()`. Key types:
   `Pipeline`, `StepSpec`, `WiringRef`
-- **codecs** (`codecs.py`): codec wrapper classes. `Codec` ABC defines the
+- **codecs** (`codecs/`): codec wrapper package. `Codec` ABC defines the
   `call(direction, port_map)` and `signature()` interface. `ComponentCodec`
   wraps a Wasmtime Component Model component (instantiation, WIT function
   lookup, encode/decode call). `CoreWasmCodec` wraps a core wasm32-wasi

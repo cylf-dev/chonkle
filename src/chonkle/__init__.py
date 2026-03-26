@@ -6,6 +6,7 @@ from chonkle.codecs import (
     CoreWasmCodec,
     CoreWasmRef,
     NativeCodec,
+    OutputPortMap,
     PortMap,
     detect_codec_type,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "CoreWasmRef",
     "Direction",
     "NativeCodec",
+    "OutputPortMap",
     "Pipeline",
     "PortMap",
     "PreparedPipeline",

@@ -16,7 +16,7 @@ class WiringRef:
     """A parsed wiring reference from the pipeline JSON."""
 
     kind: Literal["input", "constant", "step"]
-    source: str  # "input", "constant", or step codec_id
+    source: str  # "input", "constant", or step name
     port: str  # port name within the source
 
     @classmethod
@@ -72,8 +72,8 @@ class Pipeline:
 
     codec_id: str
     direction: Direction
-    inputs: dict[str, Any]
-    constants: dict[str, Any]
+    inputs: dict[str, dict[str, Any]]
+    constants: dict[str, dict[str, Any]]
     outputs: dict[str, str]  # pipeline_output_name -> wiring_ref string
     sources: dict[str, str]  # codec_id -> URI (advisory fetch hints)
     steps: list[StepSpec]

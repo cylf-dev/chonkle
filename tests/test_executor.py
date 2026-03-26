@@ -70,7 +70,13 @@ def _prepared(
         direction = pipeline.direction
     if codecs is None:
         codecs = {s.name: _FakeCodec() for s in pipeline.steps}
-    return PreparedPipeline(pipeline=pipeline, direction=direction, codecs=codecs)
+    step_by_name = {s.name: s for s in pipeline.steps}
+    return PreparedPipeline(
+        pipeline=pipeline,
+        direction=direction,
+        codecs=codecs,
+        step_by_name=step_by_name,
+    )
 
 
 # Tests below this marker require compiled codec .wasm files.

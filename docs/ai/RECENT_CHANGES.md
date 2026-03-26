@@ -4,6 +4,26 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **Code review refactor**: comprehensive review and cleanup of `src/chonkle/`.
+  - Split `codecs.py` (620 lines) into `codecs/` package: `_base.py` (ABC,
+    `PortMap`, `detect_codec_type`), `component.py`, `core.py`, `native.py`,
+    `__init__.py` (re-exports). All existing imports remain valid.
+  - Type safety: added `OutputPortMap` type alias for `list[tuple[str, bytes |
+    CoreWasmRef]]`, widened `Codec.call()` return annotation, removed 4
+    `type: ignore` suppressions from executor and codecs.
+  - `ComponentCodec` caches `Component.from_file()` at init (was re-parsing
+    per call). `_get_function` became a method (was 6-param module function).
+  - `CoreWasmCodec` gained `close()` for explicit resource cleanup.
+  - `PreparedPipeline` gained `step_by_name` field (was recomputed in `run()`).
+  - `SIGNATURES_DIR` renamed from `_SIGNATURES_DIR` (was cross-module private
+    import).
+  - CLI default preference defers to `Resolver` when unspecified (was hardcoded
+    to `("core", "component")`, missing `"native"`).
+  - Deleted dead `_select_by_preference` from resolver. Fixed `_resolve_override`
+    double filesystem read. Tightened `Pipeline.inputs`/`constants` types from
+    `dict[str, Any]` to `dict[str, dict[str, Any]]`. Fixed `WiringRef.source`
+    docstring.
+
 - **Native (numcodecs) integration** (Phase 6 of mixed-codec architecture):
   native Python codecs are now the third backend alongside Component Model
   and Core Wasm.
