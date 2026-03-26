@@ -18,7 +18,15 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
 - **Codec wrapper classes** (`codecs.py`): `Codec` ABC normalizes different
   backends. `ComponentCodec` wraps a Component Model component.
   `CoreWasmCodec` wraps a core wasm32-wasi reactor module using the binary
-  port-map wire format. `CoreWasmCodec.call()` returns lazy output port-maps
+  port-map wire format. `NativeCodec` wraps a numcodecs codec object,
+  loading its signature from bundled JSON files in
+  `src/chonkle/signatures/numcodecs/`. `numcodecs` and `numpy` are optional
+  dependencies, imported lazily at `NativeCodec` instantiation.
+  `NativeCodec` supports two calling conventions via the `data_format`
+  signature field: `"bytes"` (pass-through) and `"ndarray"` (buffer
+  conversion using a `dtype` port). Non-`bytes` ports are JSON-decoded and
+  passed as constructor kwargs to the numcodecs codec.
+  `CoreWasmCodec.call()` returns lazy output port-maps
   with `CoreWasmRef` entries (deferred references to data in linear memory).
   When a downstream codec is also a `CoreWasmCodec`, data transfers use
   `ctypes.memmove` via `Memory.data_ptr()` for single-copy between linear
@@ -30,9 +38,11 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   `_single_copy_transfer` handle cross-module data transfer.
 - **Resolution** (`resolver.py`): `Resolver` maps codec_ids to `Codec` instances.
   Resolution chain: explicit paths → per-codec overrides → local codec store
-  (content-addressed, `~/.chonkle/codecs/{codec_id}/{hash}.wasm`) → pipeline
-  sources (download and install). Backend preference system selects among
-  multiple implementations. Key types: `Resolver`, `CodecEntry`.
+  and native (combined, selected by preference) → pipeline sources (download
+  and install). Default preference: `["core", "component", "native"]`.
+  Native codecs are discovered from bundled signature files. Backend
+  preference system selects among multiple implementations. Key types:
+  `Resolver`, `CodecEntry`.
 - **Preparation** (`executor.py`): `prepare()` resolves codec_ids via
   `Resolver`, validates wiring against codec signatures (deferred output port
   checks), validates all signatures, and returns a `PreparedPipeline`.
@@ -73,6 +83,8 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   lookup, encode/decode call). `CoreWasmCodec` wraps a core wasm32-wasi
   reactor module (instantiation, binary port-map serialization via
   `Memory.read`/`Memory.write`, `alloc`/`dealloc`/`encode`/`decode` calls).
+  `NativeCodec` wraps a numcodecs codec object (lazy import, signature from
+  bundled JSON, bytes and ndarray calling conventions via `data_format`).
   The core wasm instance is kept alive for the codec's lifetime so downstream
   core codecs can single-copy transfer from its linear memory. `CoreWasmRef`
   is a deferred reference to data in a core module's linear memory — bulk
@@ -81,13 +93,16 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   accepts them as input (single-copy via `ctypes.memmove`).
   `detect_codec_type()` reads the wasm binary header to distinguish core
   (`01 00 00 00`) from component (`0d 00 01 00`).
-  Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `CoreWasmRef`,
-  `PortMap`
+  Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `NativeCodec`,
+  `CoreWasmRef`, `PortMap`
 - **resolver** (`resolver.py`): codec resolution and local store. `Resolver`
   maps codec_ids to `Codec` instances via a resolution chain: explicit paths →
-  per-codec overrides → local store scan → pipeline sources download.
-  `_scan_store()` indexes the local codec store directory. `CodecEntry` holds
-  store metadata. Key types: `Resolver`, `CodecEntry`.
+  per-codec overrides → local store and native (selected by preference) →
+  pipeline sources download. Default preference:
+  `["core", "component", "native"]`. `_scan_store()` indexes the local codec
+  store directory. `_has_native_signature()` checks for bundled native
+  signatures. `list_codecs()` includes both wasm and native entries.
+  `CodecEntry` holds store metadata. Key types: `Resolver`, `CodecEntry`.
 - **executor** (`executor.py`): prepare and execute a `Pipeline` via `Codec`
   wrappers. Entry points: `prepare(pipeline, direction, *, resolver=None)` →
   `PreparedPipeline`, `run(prepared, inputs)` → outputs. `prepare()` phases:
@@ -237,11 +252,12 @@ Two distinct layers:
 
 ## Major Rules
 
-- Two codec backends are implemented: Component Model Wasm (`ComponentCodec`)
-  and Core Wasm (`CoreWasmCodec`). Both use the `Codec` ABC. Core wasm codecs
-  use the binary port-map wire format (see `docs/reference/CORE_ABI.md`)
-  instead of the Component Model canonical ABI. Native (numcodecs) backend is
-  planned but not yet implemented.
+- Three codec backends are implemented: Component Model Wasm
+  (`ComponentCodec`), Core Wasm (`CoreWasmCodec`), and native Python
+  (`NativeCodec`). All use the `Codec` ABC. Core wasm codecs use the binary
+  port-map wire format (see `docs/reference/CORE_ABI.md`) instead of the
+  Component Model canonical ABI. Native codecs wrap numcodecs objects;
+  `numcodecs` and `numpy` are optional dependencies imported lazily.
 - Each codec step has exactly one data input port and one data output port,
   both named `"bytes"` (v1 scope; write fan-out deferred)
 - `encode_only` is derived from codec signatures at `prepare()` time, not

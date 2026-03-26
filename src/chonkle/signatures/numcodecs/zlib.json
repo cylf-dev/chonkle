@@ -1,0 +1,12 @@
+{
+  "codec_id": "zlib",
+  "implementation": "numcodecs.zlib",
+  "data_format": "bytes",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "level": {"type": "int", "required": false, "default": 1, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "codec_id": "shuffle",
+  "implementation": "numcodecs.shuffle",
+  "data_format": "ndarray",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "dtype": {"type": "string", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  }
+}

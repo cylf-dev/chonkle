@@ -59,18 +59,24 @@ Core library. All public API is re-exported from `__init__.py`.
   component (Wasmtime instantiation, WIT function lookup, encode/decode call).
   `CoreWasmCodec` wraps a core wasm32-wasi reactor module (binary port-map
   serialization, `Memory.read`/`Memory.write`, `alloc`/`dealloc` calls).
-  `CoreWasmCodec.call()` returns `CoreWasmRef` entries (lazy output parsing)
-  and accepts them as input (single-copy via `ctypes.memmove`).
-  `detect_codec_type()` reads the wasm binary header to route to the correct
-  wrapper. Port-map wire format helpers: `_serialize_port_map`,
-  `_deserialize_port_map`, `_deserialize_port_map_lazy`. Cross-module transfer:
+  `NativeCodec` wraps a numcodecs codec (lazy import, signature from bundled
+  JSON in `signatures/numcodecs/`, bytes and ndarray calling conventions via
+  `data_format`). `CoreWasmCodec.call()` returns `CoreWasmRef` entries (lazy
+  output parsing) and accepts them as input (single-copy via
+  `ctypes.memmove`). `detect_codec_type()` reads the wasm binary header to
+  route to the correct wrapper. Port-map wire format helpers:
+  `_serialize_port_map`, `_deserialize_port_map`,
+  `_deserialize_port_map_lazy`. Cross-module transfer:
   `_copy_between_memories`, `_single_copy_transfer`. Key types: `Codec`,
-  `ComponentCodec`, `CoreWasmCodec`, `CoreWasmRef`, `PortMap`.
+  `ComponentCodec`, `CoreWasmCodec`, `NativeCodec`, `CoreWasmRef`, `PortMap`.
 - **resolver.py** — Codec resolution and local store. `Resolver` maps
   codec_ids to `Codec` instances via: explicit paths → per-codec overrides →
-  local store (`~/.chonkle/codecs/{codec_id}/{hash}.wasm`) → pipeline sources
-  download. `CodecEntry` holds store metadata. `_scan_store()` indexes the
-  local store. Key types: `Resolver`, `CodecEntry`.
+  local store and native (selected by preference) → pipeline sources
+  download. Default preference: `["core", "component", "native"]`.
+  `CodecEntry` holds store metadata. `_scan_store()` indexes the local store.
+  `_has_native_signature()` checks for bundled native signatures.
+  `list_codecs()` includes both wasm and native entries.
+  Key types: `Resolver`, `CodecEntry`.
 - **executor.py** — DAG preparation and execution via `Codec` wrappers. Entry
   points: `prepare(pipeline, direction, *, resolver=None)` → `PreparedPipeline`,
   `run(prepared, inputs)` → output dict. `prepare()` resolves codec_ids via
@@ -93,6 +99,11 @@ Core library. All public API is re-exported from `__init__.py`.
 - **cli.py** — `chonkle run` command. Accepts `--pipeline`, `--input NAME=FILE`,
   `--output NAME=FILE`, `--codec-store`, `--preference`, `--override`.
   `chonkle codecs [codec_id]` subcommand lists installed implementations.
+- **signatures/numcodecs/** — Bundled signature JSON files for native
+  (numcodecs) codecs. One file per supported codec (e.g., `zlib.json`,
+  `gzip.json`, `delta.json`). Each includes the standard signature fields
+  plus `data_format` (`"bytes"` or `"ndarray"`). Adding support for a new
+  numcodecs codec requires only adding a JSON file here.
 - **tools/embed_signature.py** — CLI tool to embed a `signature.json` file into
   a `.wasm` binary. `python -m chonkle.tools.embed_signature <wasm> <sig.json>`.
 
@@ -107,6 +118,10 @@ pytest-based. Network tests require `--run-network` flag.
   CODEC_REQUIRED codec round-trip tests via `prepare()` + `run()`,
   single-copy wiring tests (`TestSingleCopyWiring` with mock refs,
   `TestSingleCopyCorePipeline` with real core identity codec)
+- **test_native_codec.py** — `NativeCodec` instantiation, bytes-format codecs
+  (zlib, gzip, bz2, lzma round-trips), ndarray-format codecs (delta, shuffle
+  round-trips), native steps in DAG pipelines, mixed native+wasm pipelines,
+  encode-only parameter handling, resolver native integration
 - **test_wasm_download.py** — cache behavior, HTTPS and OCI download mocking,
   force-redownload
 - **test_wasm_signature.py** — custom section reader/writer tests: round-trip

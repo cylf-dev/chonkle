@@ -1,0 +1,12 @@
+{
+  "codec_id": "lz4",
+  "implementation": "numcodecs.lz4",
+  "data_format": "bytes",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "acceleration": {"type": "int", "required": false, "default": 1, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  }
+}

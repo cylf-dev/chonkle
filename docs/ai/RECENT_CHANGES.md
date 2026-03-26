@@ -4,6 +4,32 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **Native (numcodecs) integration** (Phase 6 of mixed-codec architecture):
+  native Python codecs are now the third backend alongside Component Model
+  and Core Wasm.
+  - Added `NativeCodec` to `codecs.py`: wraps a numcodecs codec object.
+    Signature loaded from bundled JSON files in
+    `src/chonkle/signatures/numcodecs/`. `numcodecs` and `numpy` are optional
+    dependencies, imported lazily at `NativeCodec` instantiation. Two calling
+    conventions via `data_format` signature field: `"bytes"` (direct
+    pass-through) and `"ndarray"` (buffer conversion using `dtype` port).
+    Non-`bytes` ports are JSON-decoded and passed as constructor kwargs.
+    For ndarray codecs, `dtype` is tried as a constructor arg first (needed
+    by `Delta`) with fallback for codecs that do not accept it (`Shuffle`).
+  - Added `src/chonkle/signatures/numcodecs/` with signature files for:
+    zlib, gzip, bz2, lzma, zstd, lz4, blosc (bytes-format), delta, shuffle
+    (ndarray-format).
+  - Updated `Resolver`: default preference changed from
+    `("core", "component")` to `("core", "component", "native")`. Resolution
+    chain step 2 now combines local store entries and native signatures,
+    selecting by preference. `list_codecs()` includes native entries.
+    Per-codec overrides can select native implementations.
+  - Exported `NativeCodec` from `chonkle.__init__`.
+  - Added `tests/test_native_codec.py`: instantiation tests, bytes-format
+    round-trips (zlib, gzip, bz2, lzma), ndarray-format round-trips (delta,
+    shuffle), pipeline integration (single step, chained, mixed with fake
+    wasm, encode-only handling), resolver native integration tests.
+
 - **Single-copy optimization** (Phase 5 of mixed-codec architecture): data
   transfer between sequential core wasm codec steps now uses a single
   `ctypes.memmove` between linear memories instead of two copies through Python.
