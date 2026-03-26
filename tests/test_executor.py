@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from chonkle.codecs import Codec, PortMap
+from chonkle.codecs import Codec, CoreWasmCodec, CoreWasmRef, PortMap
 from chonkle.executor import PreparedPipeline, prepare, run
 from chonkle.pipeline import Direction, Pipeline
 from chonkle.resolver import Resolver
@@ -1408,3 +1408,232 @@ class TestCogChunkPipeline:
         inverted = run(inv, {"bytes": tile})
         forward = run(fwd, {"bytes": tile})
         assert inverted["bytes"] == forward["bytes"]
+
+
+class TestSingleCopyWiring:
+    """Verify that CoreWasmRef values flow through the executor correctly.
+
+    Uses _FakeCodec variants to test materialization logic without needing
+    compiled wasm modules.
+    """
+
+    @staticmethod
+    def _make_ref(data: bytes) -> CoreWasmRef:
+        """Create a CoreWasmRef backed by mock memory for wiring tests."""
+
+        class _MockMemory:
+            def read(self, store: Any, start: int, end: int) -> bytes:
+                return data[start:end]
+
+        class _MockCodec:
+            memory = _MockMemory()
+            store = None
+
+        return CoreWasmRef(codec=_MockCodec(), ptr=0, length=len(data))  # type: ignore[arg-type]
+
+    def test_ref_materialized_for_component_codec(self) -> None:
+        """CoreWasmRef from an upstream step is materialized when passed
+        to a downstream component (non-core) codec."""
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_b.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                },
+                "step_b": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "step_a.bytes"},
+                },
+            },
+        }
+        pipeline = Pipeline.parse(data)
+        received_b: list = []
+
+        ref = self._make_ref(b"from_core")
+
+        def fake_a(direction, port_map):
+            return [("bytes", ref)]
+
+        def fake_b(direction, port_map):
+            received_b.extend(port_map)
+            return [("bytes", b"final")]
+
+        codecs: dict[str, Codec] = {
+            "step_a": _FakeCodec(call_fn=fake_a),
+            "step_b": _FakeCodec(call_fn=fake_b),
+        }
+        prepared = _prepared(pipeline, codecs=codecs)
+        result = run(prepared, {"bytes": b"input"})
+
+        assert result == {"bytes": b"final"}
+        # step_b is a component codec, so the ref should be materialized
+        _, value = received_b[0]
+        assert isinstance(value, bytes)
+        assert value == b"from_core"
+
+    def test_ref_materialized_in_final_output(self) -> None:
+        """CoreWasmRef in the final pipeline output is materialized to bytes."""
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
+        pipeline = Pipeline.parse(data)
+        ref = self._make_ref(b"deferred_output")
+
+        codecs: dict[str, Codec] = {
+            "s": _FakeCodec(call_fn=lambda d, pm: [("bytes", ref)]),
+        }
+        prepared = _prepared(pipeline, codecs=codecs)
+        result = run(prepared, {"bytes": b"input"})
+
+        assert isinstance(result["bytes"], bytes)
+        assert result["bytes"] == b"deferred_output"
+
+    def test_inverted_ref_materialized_in_final_output(self) -> None:
+        """CoreWasmRef is materialized in inverted execution final output."""
+        data = {
+            "codec_id": "test",
+            "direction": "decode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
+        pipeline = Pipeline.parse(data)
+        ref = self._make_ref(b"inverted_deferred")
+
+        codecs: dict[str, Codec] = {
+            "s": _FakeCodec(call_fn=lambda d, pm: [("bytes", ref)]),
+        }
+        prepared = _prepared(pipeline, direction="encode", codecs=codecs)
+        result = run(prepared, {"bytes": b"input"})
+
+        assert isinstance(result["bytes"], bytes)
+        assert result["bytes"] == b"inverted_deferred"
+
+
+@CORE_CODEC_REQUIRED
+class TestSingleCopyCorePipeline:
+    """Integration tests for single-copy transfer between core wasm steps.
+
+    Requires the identity-core-c codec to be built.
+    """
+
+    def test_two_step_core_returns_correct_output(self, raw_chunk: bytes) -> None:
+        """Two sequential core identity steps produce correct output via
+        deferred CoreWasmRef values in the value store."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "step_b.bytes"},
+                "steps": {
+                    "step_a": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    },
+                    "step_b": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "step_a.bytes"},
+                    },
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "encode", resolver=resolver)
+
+        assert isinstance(prepared.codecs["step_a"], CoreWasmCodec)
+        assert isinstance(prepared.codecs["step_b"], CoreWasmCodec)
+
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk
+
+    def test_core_codec_call_returns_core_wasm_ref(self, raw_chunk: bytes) -> None:
+        """CoreWasmCodec.call() returns CoreWasmRef entries (lazy output)."""
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        codec = resolver.resolve("identity")
+        assert isinstance(codec, CoreWasmCodec)
+
+        output = codec.call("encode", [("bytes", raw_chunk)])
+        assert len(output) == 1
+        name, value = output[0]
+        assert name == "bytes"
+        assert isinstance(value, CoreWasmRef)
+        assert value.materialize() == raw_chunk
+
+    def test_three_step_core_chain(self, raw_chunk: bytes) -> None:
+        """Three sequential core identity steps chain correctly."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "encode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "step_c.bytes"},
+                "steps": {
+                    "step_a": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    },
+                    "step_b": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "step_a.bytes"},
+                    },
+                    "step_c": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "step_b.bytes"},
+                    },
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "encode", resolver=resolver)
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk
+
+    def test_inverted_two_step_core_pipeline(self, raw_chunk: bytes) -> None:
+        """Inverted execution through two core identity steps works correctly."""
+        pipeline = Pipeline.parse(
+            {
+                "codec_id": "test",
+                "direction": "decode",
+                "inputs": {"bytes": {"type": "bytes"}},
+                "constants": {},
+                "outputs": {"bytes": "step_b.bytes"},
+                "steps": {
+                    "step_a": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "input.bytes"},
+                    },
+                    "step_b": {
+                        "codec_id": "identity",
+                        "inputs": {"bytes": "step_a.bytes"},
+                    },
+                },
+            }
+        )
+        resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
+        prepared = prepare(pipeline, "encode", resolver=resolver)
+        result = run(prepared, {"bytes": raw_chunk})
+        assert result["bytes"] == raw_chunk

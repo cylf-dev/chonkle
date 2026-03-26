@@ -18,11 +18,16 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
 - **Codec wrapper classes** (`codecs.py`): `Codec` ABC normalizes different
   backends. `ComponentCodec` wraps a Component Model component.
   `CoreWasmCodec` wraps a core wasm32-wasi reactor module using the binary
-  port-map wire format (serialized port-maps via `Memory.read`/`Memory.write`).
+  port-map wire format. `CoreWasmCodec.call()` returns lazy output port-maps
+  with `CoreWasmRef` entries (deferred references to data in linear memory).
+  When a downstream codec is also a `CoreWasmCodec`, data transfers use
+  `ctypes.memmove` via `Memory.data_ptr()` for single-copy between linear
+  memories. Non-core downstream codecs receive materialized bytes.
   `detect_codec_type()` reads the 8-byte wasm header to distinguish core vs
   component model binaries. Port-map serialization helpers
-  (`_serialize_port_map`, `_deserialize_port_map`) implement the core ABI wire
-  format.
+  (`_serialize_port_map`, `_deserialize_port_map`, `_deserialize_port_map_lazy`)
+  implement the core ABI wire format. `_copy_between_memories` and
+  `_single_copy_transfer` handle cross-module data transfer.
 - **Resolution** (`resolver.py`): `Resolver` maps codec_ids to `Codec` instances.
   Resolution chain: explicit paths → per-codec overrides → local codec store
   (content-addressed, `~/.chonkle/codecs/{codec_id}/{hash}.wasm`) → pipeline
@@ -34,8 +39,12 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   Validation failures are reported before any codec is called.
 - **Execution** (`executor.py`): `run()` takes a `PreparedPipeline` and inputs,
   executes the DAG by calling `codec.call(direction, port_map)` for each step.
-  Data flows between steps through `value_store: dict[str, bytes]` on the Python
-  heap.
+  Data flows between steps through `value_store: dict[str, bytes | CoreWasmRef]`
+  — core wasm codec outputs remain as deferred references in linear memory
+  until consumed. Port-map builders materialize `CoreWasmRef` for non-core
+  downstream codecs and pass them through for core downstream codecs (enabling
+  single-copy transfer). Final pipeline outputs are always materialized to
+  bytes.
 - **Codec interface** (Component Model): each component implements
   `chonkle:codec/transform@0.1.0` (defined in `wit/codec.wit`), exporting
   `encode` and `decode` functions that take a `port-map` (list of named byte
@@ -64,10 +73,16 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   lookup, encode/decode call). `CoreWasmCodec` wraps a core wasm32-wasi
   reactor module (instantiation, binary port-map serialization via
   `Memory.read`/`Memory.write`, `alloc`/`dealloc`/`encode`/`decode` calls).
-  The core wasm instance is kept alive for the codec's lifetime (required for
-  future single-copy transfer). `detect_codec_type()` reads the wasm binary
-  header to distinguish core (`01 00 00 00`) from component (`0d 00 01 00`).
-  Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `PortMap`
+  The core wasm instance is kept alive for the codec's lifetime so downstream
+  core codecs can single-copy transfer from its linear memory. `CoreWasmRef`
+  is a deferred reference to data in a core module's linear memory — bulk
+  data stays in-place until materialized or single-copied. `CoreWasmCodec`
+  returns `CoreWasmRef` entries from `call()` (lazy output parsing) and
+  accepts them as input (single-copy via `ctypes.memmove`).
+  `detect_codec_type()` reads the wasm binary header to distinguish core
+  (`01 00 00 00`) from component (`0d 00 01 00`).
+  Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `CoreWasmRef`,
+  `PortMap`
 - **resolver** (`resolver.py`): codec resolution and local store. `Resolver`
   maps codec_ids to `Codec` instances via a resolution chain: explicit paths →
   per-codec overrides → local store scan → pipeline sources download.
@@ -80,8 +95,10 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   (`_validate_wiring_against_signatures()`), signature validation
   (`_validate_signatures()`). `run()` phases: `_execute_forward()` /
   `_execute_inverted()` (split by direction, both use
-  `value_store: dict[str, bytes]`), `_forward_port_map()` /
-  `_inverted_port_map()` (build port-maps from value_store).
+  `value_store: dict[str, bytes | CoreWasmRef]`), `_forward_port_map()` /
+  `_inverted_port_map()` (build port-maps from value_store, materializing
+  `CoreWasmRef` for non-core codecs, passing through for core codecs).
+  `_materialize()` resolves deferred refs to bytes for final outputs.
   `_get_encode_only_inputs()` derives encode-only ports from codec signatures.
   `_validate_signature()` (per-step signature checker), `_check_input_types()`
   (cross-step type compatibility). Key type: `PreparedPipeline`

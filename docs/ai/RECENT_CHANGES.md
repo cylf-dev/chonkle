@@ -4,13 +4,37 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **Single-copy optimization** (Phase 5 of mixed-codec architecture): data
+  transfer between sequential core wasm codec steps now uses a single
+  `ctypes.memmove` between linear memories instead of two copies through Python.
+  - Added `CoreWasmRef` dataclass to `codecs.py`: deferred reference to data in
+    a core wasm module's linear memory. `materialize()` copies to Python bytes
+    only when needed (e.g., for non-core downstream codecs or final output).
+  - `CoreWasmCodec.call()` now returns lazy output port-maps: metadata (port
+    names, lengths) is parsed from linear memory but bulk data stays as
+    `CoreWasmRef` entries. Input port-maps with `CoreWasmRef` entries are
+    serialized into the destination module's memory using `_copy_between_memories`
+    (ctypes.memmove via `Memory.data_ptr()`, with `Memory.read`/`Memory.write`
+    fallback).
+  - Added `_deserialize_port_map_lazy()`, `_copy_between_memories()`, and
+    `_single_copy_transfer()` to `codecs.py`.
+  - Executor `value_store` widened to `dict[str, bytes | CoreWasmRef]`.
+    Port-map builders (`_forward_port_map`, `_inverted_port_map`) pass
+    `CoreWasmRef` values through for core wasm codecs and materialize them for
+    other backends. `_materialize()` helper resolves final pipeline outputs.
+  - Exported `CoreWasmRef` from `chonkle.__init__`.
+  - Added `TestSingleCopyWiring` (mock-based executor materialization tests) and
+    `TestSingleCopyCorePipeline` (integration tests with real core identity
+    codec: two-step, three-step chain, inverted execution, lazy output
+    verification).
+
 - **Core ABI** (Phase 4 of mixed-codec architecture): core wasm codecs are now
   supported as a second backend alongside Component Model codecs.
   - Added `CoreWasmCodec` to `codecs.py`: wraps a wasm32-wasi reactor module,
     serializes/deserializes port-maps using a binary wire format via
     `Memory.read`/`Memory.write`, calls `alloc`/`dealloc`/`encode`/`decode`
-    exports. Module instance is kept alive for the codec's lifetime (preparing
-    for single-copy transfer in Phase 5).
+    exports. Module instance is kept alive for the codec's lifetime so
+    downstream core codecs can single-copy transfer from its linear memory.
   - Added port-map wire format helpers (`_serialize_port_map`,
     `_deserialize_port_map`) in `codecs.py`.
   - Added `docs/reference/CORE_ABI.md`: normative spec for the core ABI

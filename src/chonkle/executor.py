@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from chonkle.codecs import Codec, PortMap
+from chonkle.codecs import Codec, CoreWasmCodec, CoreWasmRef, PortMap
 from chonkle.pipeline import Direction, Pipeline, StepSpec, WiringRef
 from chonkle.resolver import Resolver
 
@@ -135,7 +135,7 @@ def _execute_forward(
     Seeds value_store with constants and pipeline inputs (omitting encode_only
     inputs when direction is ``"decode"``).
     """
-    value_store: dict[str, bytes] = {}
+    value_store: dict[str, bytes | CoreWasmRef] = {}
 
     for name, descriptor in pipeline.constants.items():
         value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
@@ -152,7 +152,7 @@ def _execute_forward(
         step = step_by_name[step_name]
         codec = codecs[step_name]
         encode_only = _get_encode_only_inputs(codec.signature())
-        port_map = _forward_port_map(step, value_store, direction, encode_only)
+        port_map = _forward_port_map(step, value_store, direction, encode_only, codec)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
@@ -161,7 +161,8 @@ def _execute_forward(
             value_store[f"{step_name}.{port_name}"] = value
 
     return {
-        out_name: value_store[ref_str] for out_name, ref_str in pipeline.outputs.items()
+        out_name: _materialize(value_store[ref_str])
+        for out_name, ref_str in pipeline.outputs.items()
     }
 
 
@@ -173,7 +174,7 @@ def _execute_inverted(
     direction: Direction,
 ) -> dict[str, bytes]:
     """Execute steps in reversed topological order, routing results backward."""
-    value_store: dict[str, bytes] = {}
+    value_store: dict[str, bytes | CoreWasmRef] = {}
 
     for name, descriptor in pipeline.constants.items():
         value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
@@ -188,7 +189,7 @@ def _execute_inverted(
         encode_only = _get_encode_only_inputs(sig)
         output_ports = list(sig.get("outputs", {}).keys())
         port_map = _inverted_port_map(
-            step_name, step, value_store, direction, output_ports, encode_only
+            step_name, step, value_store, direction, output_ports, encode_only, codec
         )
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
@@ -199,7 +200,7 @@ def _execute_inverted(
                 value_store[step.inputs[port_name]] = value
 
     return {
-        name: value_store[f"input.{name}"]
+        name: _materialize(value_store[f"input.{name}"])
         for name, desc in pipeline.inputs.items()
         if direction == "encode" or not desc.get("encode_only", False)
     }
@@ -207,42 +208,53 @@ def _execute_inverted(
 
 def _forward_port_map(
     step: StepSpec,
-    value_store: dict[str, bytes],
+    value_store: dict[str, bytes | CoreWasmRef],
     direction: Direction,
     encode_only_inputs: set[str],
+    codec: Codec,
 ) -> PortMap:
     """Build the port-map for a step in forward execution.
 
     Iterates step.inputs, omitting encode_only ports when direction is decode.
-    Encode-only is derived from the codec's signature.
+    ``CoreWasmRef`` values are passed through for core wasm codecs (enabling
+    single-copy transfer) and materialized to bytes for other backends.
     """
-    port_map: PortMap = []
+    is_core = isinstance(codec, CoreWasmCodec)
+    port_map: list[tuple[str, bytes | CoreWasmRef]] = []
     for port_name, ref_str in step.inputs.items():
         if direction == "decode" and port_name in encode_only_inputs:
             continue
-        port_map.append((port_name, value_store[ref_str]))
-    return port_map
+        value = value_store[ref_str]
+        if isinstance(value, CoreWasmRef) and not is_core:
+            value = value.materialize()
+        port_map.append((port_name, value))
+    return port_map  # type: ignore[return-value]
 
 
 def _inverted_port_map(
     step_name: str,
     step: StepSpec,
-    value_store: dict[str, bytes],
+    value_store: dict[str, bytes | CoreWasmRef],
     direction: Direction,
     output_ports: list[str],
     encode_only_inputs: set[str],
+    codec: Codec,
 ) -> PortMap:
     """Build the port-map for a step in inverted execution.
 
     The step's forward-direction outputs (from signature) become its
     inverted-direction inputs. Inputs wired from constants (non-encode_only)
     are always included. encode_only_inputs are appended only when calling
-    encode.
+    encode. ``CoreWasmRef`` values are passed through for core wasm codecs
+    and materialized for other backends.
     """
-    port_map: PortMap = []
+    is_core = isinstance(codec, CoreWasmCodec)
+    port_map: list[tuple[str, bytes | CoreWasmRef]] = []
     for port_name in output_ports:
         val = value_store.get(f"{step_name}.{port_name}")
         if val is not None:
+            if isinstance(val, CoreWasmRef) and not is_core:
+                val = val.materialize()
             port_map.append((port_name, val))
     for port_name, ref_str in step.inputs.items():
         if ref_str.startswith("constant.") and port_name not in encode_only_inputs:
@@ -251,7 +263,14 @@ def _inverted_port_map(
         for port_name in encode_only_inputs:
             if port_name in step.inputs:
                 port_map.append((port_name, value_store[step.inputs[port_name]]))
-    return port_map
+    return port_map  # type: ignore[return-value]
+
+
+def _materialize(value: bytes | CoreWasmRef) -> bytes:
+    """Resolve a value to bytes, materializing ``CoreWasmRef`` if needed."""
+    if isinstance(value, CoreWasmRef):
+        return value.materialize()
+    return value
 
 
 def _get_encode_only_inputs(signature: dict[str, Any]) -> set[str]:

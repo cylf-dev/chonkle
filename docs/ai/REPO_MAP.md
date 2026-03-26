@@ -59,10 +59,13 @@ Core library. All public API is re-exported from `__init__.py`.
   component (Wasmtime instantiation, WIT function lookup, encode/decode call).
   `CoreWasmCodec` wraps a core wasm32-wasi reactor module (binary port-map
   serialization, `Memory.read`/`Memory.write`, `alloc`/`dealloc` calls).
+  `CoreWasmCodec.call()` returns `CoreWasmRef` entries (lazy output parsing)
+  and accepts them as input (single-copy via `ctypes.memmove`).
   `detect_codec_type()` reads the wasm binary header to route to the correct
   wrapper. Port-map wire format helpers: `_serialize_port_map`,
-  `_deserialize_port_map`. Key types: `Codec`, `ComponentCodec`,
-  `CoreWasmCodec`, `PortMap`.
+  `_deserialize_port_map`, `_deserialize_port_map_lazy`. Cross-module transfer:
+  `_copy_between_memories`, `_single_copy_transfer`. Key types: `Codec`,
+  `ComponentCodec`, `CoreWasmCodec`, `CoreWasmRef`, `PortMap`.
 - **resolver.py** — Codec resolution and local store. `Resolver` maps
   codec_ids to `Codec` instances via: explicit paths → per-codec overrides →
   local store (`~/.chonkle/codecs/{codec_id}/{hash}.wasm`) → pipeline sources
@@ -72,10 +75,12 @@ Core library. All public API is re-exported from `__init__.py`.
   points: `prepare(pipeline, direction, *, resolver=None)` → `PreparedPipeline`,
   `run(prepared, inputs)` → output dict. `prepare()` resolves codec_ids via
   `Resolver`, validates wiring against signatures (deferred output port checks),
-  and validates all signatures. `run()` executes the DAG. Encode-only inputs
-  are derived from codec signatures. Key internals: `PreparedPipeline`,
-  `value_store`, `_forward_port_map`, `_inverted_port_map`,
-  `_get_encode_only_inputs`, `_validate_wiring_against_signatures`.
+  and validates all signatures. `run()` executes the DAG. `value_store` holds
+  `bytes | CoreWasmRef`; port-map builders materialize refs for non-core
+  codecs, pass through for core codecs. `_materialize()` resolves final
+  outputs. Encode-only inputs are derived from codec signatures. Key internals:
+  `PreparedPipeline`, `value_store`, `_forward_port_map`, `_inverted_port_map`,
+  `_materialize`, `_get_encode_only_inputs`, `_validate_wiring_against_signatures`.
 - **wasm_download.py** — codec URI resolution and fetch cache. `resolve_uri()`
   handles `file://`, `https://`, and `oci://`. Downloads only the `.wasm` file
   (signatures are embedded). `download_https()` and `download_oci()` store
@@ -99,7 +104,9 @@ pytest-based. Network tests require `--run-network` flag.
 - **test_codecs.py** — `detect_codec_type()` binary header detection tests
 - **test_executor.py** — executor wiring logic (fake codec instances), signature
   validation via `prepare()`, URI resolution integration,
-  CODEC_REQUIRED codec round-trip tests via `prepare()` + `run()`
+  CODEC_REQUIRED codec round-trip tests via `prepare()` + `run()`,
+  single-copy wiring tests (`TestSingleCopyWiring` with mock refs,
+  `TestSingleCopyCorePipeline` with real core identity codec)
 - **test_wasm_download.py** — cache behavior, HTTPS and OCI download mocking,
   force-redownload
 - **test_wasm_signature.py** — custom section reader/writer tests: round-trip
