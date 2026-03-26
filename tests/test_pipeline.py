@@ -55,10 +55,7 @@ class TestParsePipeline:
     def test_linear_pipeline_step_fields(self, cog_decode_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
         step = pipeline.steps[0]  # zlib step
-        assert step.src.startswith("file://")
         assert step.inputs == {"bytes": "input.bytes", "level": "constant.level"}
-        assert step.outputs == ["bytes"]
-        assert step.encode_only_inputs == ["level"]
 
     def test_dag_pipeline_from_fixture(self, page_split_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(page_split_pipeline_json)
@@ -93,6 +90,29 @@ class TestParsePipeline:
         pipeline = Pipeline.parse(page_split_pipeline_json)
         assert set(pipeline.outputs.keys()) == {"rep_levels", "def_levels", "data"}
 
+    def test_sources_parsed(self) -> None:
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "sources": {"zlib": "oci://ghcr.io/example/zlib:v1"},
+            "outputs": {},
+            "steps": {},
+        }
+        pipeline = Pipeline.parse(data)
+        assert pipeline.sources == {"zlib": "oci://ghcr.io/example/zlib:v1"}
+
+    def test_sources_default_empty(self) -> None:
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {},
+            "outputs": {},
+            "steps": {},
+        }
+        pipeline = Pipeline.parse(data)
+        assert pipeline.sources == {}
+
     def test_missing_direction_raises(self) -> None:
         with pytest.raises(ValueError, match="direction"):
             Pipeline.parse({"codec_id": "t", "inputs": {}, "steps": {}})
@@ -114,9 +134,7 @@ class TestParsePipeline:
                     "steps": {
                         "s": {
                             "codec_id": "some-codec",
-                            "src": "file:///fake.wasm",
                             "inputs": {"bytes": "input.bytes"},
-                            "outputs": ["bytes"],
                         }
                     },
                 }
@@ -132,9 +150,7 @@ class TestParsePipeline:
             "steps": {
                 "s": {
                     "codec_id": "some-codec",
-                    "src": "file:///fake.wasm",
                     "inputs": {"bytes": "input.bytes"},
-                    "outputs": ["bytes"],
                 }
             },
         }
@@ -158,9 +174,7 @@ class TestWiringValidation:
         data["steps"] = {
             "s": {
                 "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
             }
         }
         data["outputs"] = {"bytes": "s.bytes"}
@@ -173,9 +187,7 @@ class TestWiringValidation:
         data["steps"] = {
             "s": {
                 "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
-                "outputs": ["bytes"],
             }
         }
         pipeline = Pipeline.parse(data)
@@ -186,15 +198,11 @@ class TestWiringValidation:
         data["steps"] = {
             "a": {
                 "codec_id": "some-codec",
-                "src": "file:///a.wasm",
                 "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
             },
             "b": {
                 "codec_id": "some-codec",
-                "src": "file:///b.wasm",
                 "inputs": {"bytes": "a.bytes"},
-                "outputs": ["bytes"],
             },
         }
         pipeline = Pipeline.parse(data)
@@ -206,15 +214,11 @@ class TestWiringValidation:
         data["steps"] = {
             "proc_a": {
                 "codec_id": "identity",
-                "src": "file:///identity.wasm",
                 "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
             },
             "proc_b": {
                 "codec_id": "identity",
-                "src": "file:///identity.wasm",
                 "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
             },
         }
         pipeline = Pipeline.parse(data)
@@ -226,9 +230,7 @@ class TestWiringValidation:
         data["steps"] = {
             "s": {
                 "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
                 "inputs": {"bytes": "input.missing"},
-                "outputs": ["bytes"],
             }
         }
         with pytest.raises(ValueError, match="input 'missing' is not declared"):
@@ -239,9 +241,7 @@ class TestWiringValidation:
         data["steps"] = {
             "s": {
                 "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
                 "inputs": {"n": "constant.missing"},
-                "outputs": ["bytes"],
             }
         }
         with pytest.raises(ValueError, match="constant 'missing' is not declared"):
@@ -252,33 +252,10 @@ class TestWiringValidation:
         data["steps"] = {
             "s": {
                 "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
                 "inputs": {"bytes": "ghost.bytes"},
-                "outputs": ["bytes"],
             }
         }
         with pytest.raises(ValueError, match="step 'ghost' does not exist"):
-            Pipeline.parse(data)
-
-    def test_undefined_step_output_port_raises(self) -> None:
-        data = self._base()
-        data["steps"] = {
-            "a": {
-                "codec_id": "some-codec",
-                "src": "file:///a.wasm",
-                "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
-            },
-            "b": {
-                "codec_id": "some-codec",
-                "src": "file:///b.wasm",
-                "inputs": {"bytes": "a.nonexistent"},
-                "outputs": ["bytes"],
-            },
-        }
-        with pytest.raises(
-            ValueError, match="does not declare output port 'nonexistent'"
-        ):
             Pipeline.parse(data)
 
     def test_pipeline_output_input_passthrough(self) -> None:
@@ -296,53 +273,16 @@ class TestWiringValidation:
         pipeline = Pipeline.parse(data)
         assert pipeline.outputs == {"level": "constant.level"}
 
-    def test_undefined_pipeline_output_ref_raises(self) -> None:
-        data = self._base()
-        data["steps"] = {
-            "s": {
-                "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
-                "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
-            }
-        }
-        data["outputs"] = {"out": "s.missing_port"}
-        with pytest.raises(
-            ValueError, match="does not declare output port 'missing_port'"
-        ):
-            Pipeline.parse(data)
-
-    def test_encode_only_input_not_in_inputs_raises(self) -> None:
-        """encode_only_input absent from step inputs raises at parse time."""
-        data = self._base()
-        data["steps"] = {
-            "s": {
-                "codec_id": "some-codec",
-                "src": "file:///fake.wasm",
-                "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
-                "encode_only_inputs": ["level"],  # "level" not in inputs
-            }
-        }
-        with pytest.raises(
-            ValueError, match="encode_only_input 'level' is not declared in inputs"
-        ):
-            Pipeline.parse(data)
-
     def test_cycle_detection(self) -> None:
         data = self._base()
         data["steps"] = {
             "a": {
                 "codec_id": "some-codec",
-                "src": "file:///a.wasm",
                 "inputs": {"bytes": "b.bytes"},
-                "outputs": ["bytes"],
             },
             "b": {
                 "codec_id": "some-codec",
-                "src": "file:///b.wasm",
                 "inputs": {"bytes": "a.bytes"},
-                "outputs": ["bytes"],
             },
         }
         with pytest.raises(ValueError, match="cycle"):
@@ -360,21 +300,15 @@ class TestTopologicalOrder:
             "steps": {
                 "c": {
                     "codec_id": "some-codec",
-                    "src": "file:///c.wasm",
                     "inputs": {"x": "b.x"},
-                    "outputs": ["x"],
                 },
                 "b": {
                     "codec_id": "some-codec",
-                    "src": "file:///b.wasm",
                     "inputs": {"x": "a.x"},
-                    "outputs": ["x"],
                 },
                 "a": {
                     "codec_id": "some-codec",
-                    "src": "file:///a.wasm",
                     "inputs": {"x": "input.x"},
-                    "outputs": ["x"],
                 },
             },
         }
@@ -393,21 +327,15 @@ class TestTopologicalOrder:
             "steps": {
                 "split": {
                     "codec_id": "page-split",
-                    "src": "file:///split.wasm",
                     "inputs": {"bytes": "input.bytes"},
-                    "outputs": ["a", "b"],
                 },
                 "proc_a": {
                     "codec_id": "identity",
-                    "src": "file:///id.wasm",
                     "inputs": {"bytes": "split.a"},
-                    "outputs": ["bytes"],
                 },
                 "proc_b": {
                     "codec_id": "identity",
-                    "src": "file:///id.wasm",
                     "inputs": {"bytes": "split.b"},
-                    "outputs": ["bytes"],
                 },
             },
         }
@@ -426,15 +354,11 @@ class TestTopologicalOrder:
             "steps": {
                 "step_a": {
                     "codec_id": "some-codec",
-                    "src": "file:///a.wasm",
                     "inputs": {"bytes": "input.a"},
-                    "outputs": ["bytes"],
                 },
                 "step_b": {
                     "codec_id": "some-codec",
-                    "src": "file:///b.wasm",
                     "inputs": {"bytes": "input.b"},
-                    "outputs": ["bytes"],
                 },
             },
         }

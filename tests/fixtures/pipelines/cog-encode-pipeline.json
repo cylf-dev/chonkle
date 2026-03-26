@@ -11,20 +11,15 @@
   "steps": {
     "predictor2": {
       "codec_id": "tiff-predictor-2",
-      "src": "file:///path/to/codec/tiff-predictor-2-c/tiff-predictor-2.wasm",
       "inputs": {
         "bytes":            "input.bytes",
         "bytes_per_sample": "constant.bytes_per_sample",
         "width":            "constant.width"
-      },
-      "outputs": ["bytes"]
+      }
     },
     "zlib": {
       "codec_id": "zlib",
-      "src": "file:///path/to/codec/zlib-rs/zlib.wasm",
-      "inputs": {"bytes": "predictor2.bytes", "level": "constant.level"},
-      "outputs": ["bytes"],
-      "encode_only_inputs": ["level"]
+      "inputs": {"bytes": "predictor2.bytes", "level": "constant.level"}
     }
   }
 }

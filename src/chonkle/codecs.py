@@ -41,6 +41,18 @@ class Codec(ABC):
         """Backend type: ``"component"``, ``"core"``, or ``"native"``."""
         ...
 
+    @property
+    @abstractmethod
+    def codec_id(self) -> str:
+        """The logical codec identifier from the signature."""
+        ...
+
+    @property
+    @abstractmethod
+    def implementation(self) -> str:
+        """The specific implementation identifier from the signature."""
+        ...
+
     @abstractmethod
     def signature(self) -> dict[str, Any]:
         """Return the codec's signature (loaded at instantiation)."""
@@ -68,6 +80,14 @@ class ComponentCodec(Codec):
     @property
     def codec_type(self) -> str:
         return "component"
+
+    @property
+    def codec_id(self) -> str:
+        return self._sig.get("codec_id", "")
+
+    @property
+    def implementation(self) -> str:
+        return self._sig.get("implementation", "")
 
     def signature(self) -> dict[str, Any]:
         return self._sig

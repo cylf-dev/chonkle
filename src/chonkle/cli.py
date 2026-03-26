@@ -6,16 +6,18 @@ from pathlib import Path
 
 from chonkle.executor import prepare, run
 from chonkle.pipeline import Pipeline
+from chonkle.resolver import Resolver
 
 
 def main() -> None:
     """Entry point for the chonkle CLI."""
     parser = argparse.ArgumentParser(
         prog="chonkle",
-        description="Execute a Wasm Component Model codec pipeline DAG.",
+        description="Execute a Wasm codec pipeline DAG.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # --- run command ---
     run_parser = subparsers.add_parser(
         "run",
         help="Execute a pipeline JSON against named input data.",
@@ -52,15 +54,70 @@ def main() -> None:
         ),
     )
     run_parser.add_argument(
-        "--force-download",
-        action="store_true",
-        default=False,
-        help="Re-download cached codec .wasm files even if they exist locally.",
+        "--codec-store",
+        type=Path,
+        default=None,
+        help="Path to the local codec store directory.",
+    )
+    run_parser.add_argument(
+        "--preference",
+        default=None,
+        help="Comma-separated backend preference order (e.g., 'core,component').",
+    )
+    run_parser.add_argument(
+        "--override",
+        metavar="ID=IMPL",
+        action="append",
+        default=[],
+        dest="overrides",
+        help="Override codec implementation: --override zlib=zlib-rs (repeatable).",
+    )
+
+    # --- codecs command ---
+    codecs_parser = subparsers.add_parser(
+        "codecs",
+        help="List installed codec implementations in the local store.",
+    )
+    codecs_parser.add_argument(
+        "codec_id",
+        nargs="?",
+        default=None,
+        help="Filter to a specific codec_id.",
+    )
+    codecs_parser.add_argument(
+        "--codec-store",
+        type=Path,
+        default=None,
+        help="Path to the local codec store directory.",
     )
 
     args = parser.parse_args()
     if args.command == "run":
         _run_command(args)
+    elif args.command == "codecs":
+        _codecs_command(args)
+
+
+def _build_resolver(args: argparse.Namespace, pipeline: Pipeline) -> Resolver:
+    """Build a Resolver from CLI flags and pipeline sources."""
+    preference = (
+        args.preference.split(",") if args.preference else ("core", "component")
+    )
+
+    overrides: dict[str, str] = {}
+    for spec in args.overrides:
+        if "=" not in spec:
+            sys.stderr.write(f"--override must be ID=IMPL, got {spec!r}\n")
+            sys.exit(1)
+        codec_id, impl = spec.split("=", 1)
+        overrides[codec_id] = impl
+
+    return Resolver(
+        codec_store=args.codec_store,
+        preference=preference,
+        overrides=overrides,
+        pipeline_sources=pipeline.sources,
+    )
 
 
 def _run_command(args: argparse.Namespace) -> None:
@@ -76,7 +133,8 @@ def _run_command(args: argparse.Namespace) -> None:
         inputs[name] = Path(path).read_bytes()
 
     direction = args.direction if args.direction is not None else pipeline.direction
-    prepared = prepare(pipeline, direction, force_download=args.force_download)
+    resolver = _build_resolver(args, pipeline)
+    prepared = prepare(pipeline, direction, resolver=resolver)
     result = run(prepared, inputs)
 
     requested_outputs: dict[str, str] = {}
@@ -95,3 +153,38 @@ def _run_command(args: argparse.Namespace) -> None:
             sys.stdout.write(f"Wrote {len(data)} bytes to {out_path}\n")
         else:
             sys.stdout.write(f"Output {port_name!r}: {len(data)} bytes\n")
+
+
+def _codecs_command(args: argparse.Namespace) -> None:
+    """List installed codec implementations."""
+    resolver = Resolver(codec_store=args.codec_store)
+    entries = resolver.list_codecs()
+
+    if args.codec_id:
+        entries = [e for e in entries if e.codec_id == args.codec_id]
+
+    if not entries:
+        if args.codec_id:
+            sys.stdout.write(f"No implementations found for {args.codec_id!r}\n")
+        else:
+            sys.stdout.write(f"No codecs installed in {resolver.store_path}\n")
+        return
+
+    if args.codec_id:
+        sys.stdout.write(f"codec_id: {args.codec_id}\nimplementations:\n")
+        for entry in entries:
+            sys.stdout.write(
+                f"  {entry.implementation or '(unnamed)':<20s}"
+                f" {entry.codec_type:<12s}"
+                f" {entry.path}\n"
+            )
+    else:
+        sys.stdout.write(
+            f"{'codec_id':<24s} {'implementation':<20s} {'backend':<12s}\n"
+        )
+        for entry in entries:
+            sys.stdout.write(
+                f"{entry.codec_id:<24s} "
+                f"{entry.implementation or '(unnamed)':<20s} "
+                f"{entry.codec_type:<12s}\n"
+            )

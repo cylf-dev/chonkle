@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from chonkle.resolver import Resolver
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 PIPELINES_DIR = FIXTURES_DIR / "pipelines"
 CHUNKS_DIR = FIXTURES_DIR / "chunks"
@@ -66,40 +68,29 @@ def cog_chunk() -> bytes:
 
 @pytest.fixture
 def cog_decode_pipeline_json() -> dict:
-    """Pipeline dict for the COG zlib+tiff-predictor-2 decode chain.
-
-    Uses real file:// URIs pointing to the built codec .wasm files.
-    """
+    """Pipeline dict for the COG zlib+tiff-predictor-2 decode chain."""
     with (PIPELINES_DIR / "cog-decode-pipeline.json").open() as f:
-        pipeline = json.load(f)
-    step_srcs = {
-        "zlib": f"file://{CODEC_DIR / 'zlib-rs' / 'zlib.wasm'}",
-        "predictor2": (
-            f"file://{CODEC_DIR / 'tiff-predictor-2-c' / 'tiff-predictor-2.wasm'}"
-        ),
-    }
-    for name, step in pipeline["steps"].items():
-        step["src"] = step_srcs[name]
-    return pipeline
+        return json.load(f)
 
 
 @pytest.fixture
 def cog_encode_pipeline_json() -> dict:
-    """Pipeline dict for the COG tiff-predictor-2+zlib encode chain.
-
-    Uses real file:// URIs pointing to the built codec .wasm files.
-    """
+    """Pipeline dict for the COG tiff-predictor-2+zlib encode chain."""
     with (PIPELINES_DIR / "cog-encode-pipeline.json").open() as f:
-        pipeline = json.load(f)
-    step_srcs = {
-        "predictor2": (
-            f"file://{CODEC_DIR / 'tiff-predictor-2-c' / 'tiff-predictor-2.wasm'}"
-        ),
-        "zlib": f"file://{CODEC_DIR / 'zlib-rs' / 'zlib.wasm'}",
-    }
-    for name, step in pipeline["steps"].items():
-        step["src"] = step_srcs[name]
-    return pipeline
+        return json.load(f)
+
+
+@pytest.fixture
+def cog_codec_resolver() -> Resolver:
+    """Resolver with explicit paths for the COG codec wasm files."""
+    return Resolver(
+        paths={
+            "zlib": CODEC_DIR / "zlib-rs" / "zlib.wasm",
+            "tiff-predictor-2": (
+                CODEC_DIR / "tiff-predictor-2-c" / "tiff-predictor-2.wasm"
+            ),
+        }
+    )
 
 
 @pytest.fixture

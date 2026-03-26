@@ -23,6 +23,7 @@ from pathlib import Path
 
 from chonkle.executor import prepare, run
 from chonkle.pipeline import Pipeline
+from chonkle.resolver import Resolver
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
@@ -30,9 +31,13 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 CODEC_DIR = REPO_ROOT / "codec"
 CHUNKS_DIR = REPO_ROOT / "tests" / "fixtures" / "chunks"
 
-ZLIB_SRC = f"file://{CODEC_DIR / 'zlib-rs' / 'zlib.wasm'}"
-PRED2_SRC = f"file://{CODEC_DIR / 'tiff-predictor-2-c' / 'tiff-predictor-2.wasm'}"
-IDENTITY_SRC = f"file://{CODEC_DIR / 'identity-c' / 'identity.wasm'}"
+RESOLVER = Resolver(
+    paths={
+        "zlib": CODEC_DIR / "zlib-rs" / "zlib.wasm",
+        "tiff-predictor-2": CODEC_DIR / "tiff-predictor-2-c" / "tiff-predictor-2.wasm",
+        "identity": CODEC_DIR / "identity-c" / "identity.wasm",
+    }
+)
 
 
 def _make_zlib_only_pipeline() -> dict:
@@ -42,16 +47,12 @@ def _make_zlib_only_pipeline() -> dict:
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {"level": {"type": "int", "value": 9}},
         "outputs": {"bytes": "zlib.bytes"},
-        "steps": [
-            {
-                "name": "zlib",
+        "steps": {
+            "zlib": {
                 "codec_id": "zlib",
-                "src": ZLIB_SRC,
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
-                "outputs": ["bytes"],
-                "encode_only_inputs": ["level"],
             }
-        ],
+        },
     }
 
 
@@ -65,19 +66,16 @@ def _make_pred2_only_pipeline(width: int) -> dict:
             "width": {"type": "int", "value": width},
         },
         "outputs": {"bytes": "predictor2.bytes"},
-        "steps": [
-            {
-                "name": "predictor2",
+        "steps": {
+            "predictor2": {
                 "codec_id": "tiff-predictor-2",
-                "src": PRED2_SRC,
                 "inputs": {
                     "bytes": "input.bytes",
                     "bytes_per_sample": "constant.bytes_per_sample",
                     "width": "constant.width",
                 },
-                "outputs": ["bytes"],
             }
-        ],
+        },
     }
 
 
@@ -88,22 +86,19 @@ def _make_identity_pipeline() -> dict:
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {},
         "outputs": {"bytes": "identity.bytes"},
-        "steps": [
-            {
-                "name": "identity",
+        "steps": {
+            "identity": {
                 "codec_id": "identity",
-                "src": IDENTITY_SRC,
                 "inputs": {"bytes": "input.bytes"},
-                "outputs": ["bytes"],
             }
-        ],
+        },
     }
 
 
 def run_identity(data: bytes, label: str) -> bytes:
     print(f"\n--- identity: {label} ({len(data):,} bytes) ---")
     pipeline = Pipeline.parse(_make_identity_pipeline())
-    prepared = prepare(pipeline, "decode")
+    prepared = prepare(pipeline, "decode", resolver=RESOLVER)
     result = run(prepared, {"bytes": data})
     return result["bytes"]
 
@@ -115,23 +110,19 @@ def _make_zlib_encode_pipeline() -> dict:
         "inputs": {"bytes": {"type": "bytes"}},
         "constants": {"level": {"type": "int", "value": 9}},
         "outputs": {"bytes": "zlib.bytes"},
-        "steps": [
-            {
-                "name": "zlib",
+        "steps": {
+            "zlib": {
                 "codec_id": "zlib",
-                "src": ZLIB_SRC,
                 "inputs": {"bytes": "input.bytes", "level": "constant.level"},
-                "outputs": ["bytes"],
-                "encode_only_inputs": ["level"],
             }
-        ],
+        },
     }
 
 
 def run_zlib(data: bytes, label: str) -> bytes:
     print(f"\n--- zlib decode: {label} ({len(data):,} bytes compressed) ---")
     pipeline = Pipeline.parse(_make_zlib_only_pipeline())
-    prepared = prepare(pipeline, "decode")
+    prepared = prepare(pipeline, "decode", resolver=RESOLVER)
     result = run(prepared, {"bytes": data})
     return result["bytes"]
 
@@ -139,7 +130,7 @@ def run_zlib(data: bytes, label: str) -> bytes:
 def run_zlib_encode(data: bytes, label: str) -> bytes:
     print(f"\n--- zlib encode: {label} ({len(data):,} bytes raw) ---")
     pipeline = Pipeline.parse(_make_zlib_encode_pipeline())
-    prepared = prepare(pipeline, "encode")
+    prepared = prepare(pipeline, "encode", resolver=RESOLVER)
     result = run(prepared, {"bytes": data})
     return result["bytes"]
 
@@ -147,7 +138,7 @@ def run_zlib_encode(data: bytes, label: str) -> bytes:
 def run_pred2(data: bytes, width: int, label: str) -> bytes:
     print(f"\n--- predictor2 decode: {label} ({len(data):,} bytes) width={width} ---")
     pipeline = Pipeline.parse(_make_pred2_only_pipeline(width))
-    prepared = prepare(pipeline, "decode")
+    prepared = prepare(pipeline, "decode", resolver=RESOLVER)
     result = run(prepared, {"bytes": data})
     return result["bytes"]
 
@@ -177,7 +168,7 @@ def main() -> None:
     run_zlib(real_z, "real COG chunk → 2 MB raw")
 
     # --- identity at various sizes (ABI isolation: pure memcpy in WASM) ---
-    identity_wasm = Path(IDENTITY_SRC.removeprefix("file://"))
+    identity_wasm = CODEC_DIR / "identity-c" / "identity.wasm"
     if identity_wasm.exists():
         run_identity(bytes(64), "64 B")
         run_identity(bytes(1024), "1 KB")

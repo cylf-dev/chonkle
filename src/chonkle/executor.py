@@ -1,4 +1,4 @@
-"""Execute a DAG pipeline via Wasmtime Component Model."""
+"""Execute a DAG pipeline via codec wrappers."""
 
 from __future__ import annotations
 
@@ -8,11 +8,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-import wasmtime
-
-from chonkle.codecs import Codec, ComponentCodec, PortMap, detect_codec_type
+from chonkle.codecs import Codec, PortMap
 from chonkle.pipeline import Direction, Pipeline, StepSpec, WiringRef
-from chonkle.wasm_download import resolve_uri
+from chonkle.resolver import Resolver
 
 log = logging.getLogger(__name__)
 
@@ -33,50 +31,42 @@ def prepare(
     pipeline: Pipeline,
     direction: Direction,
     *,
-    force_download: bool = False,
+    resolver: Resolver | None = None,
 ) -> PreparedPipeline:
     """Validate a pipeline and prepare it for execution.
 
-    Resolves codec URIs, instantiates codec wrappers (which load embedded
-    signatures), and validates all step signatures.  If this returns
+    Resolves codec_ids via the resolver, validates wiring against codec
+    signatures, and validates all step signatures. If this returns
     successfully, the pipeline is guaranteed executable for the given
     direction.
 
     Args:
         pipeline: Parsed and validated pipeline DAG.
         direction: Direction to execute (``"encode"`` or ``"decode"``).
-        force_download: Re-download codec ``.wasm`` files even if cached.
+        resolver: Codec resolver. If ``None``, a default resolver is
+            created using the pipeline's ``sources`` field.
 
     Returns:
         A :class:`PreparedPipeline` ready for :func:`run`.
 
     Raises:
-        ValueError: Signature validation fails or a codec type is
-            unsupported.
+        ValueError: Signature validation fails, a codec cannot be
+            resolved, or wiring references invalid output ports.
     """
+    if resolver is None:
+        resolver = Resolver(pipeline_sources=pipeline.sources)
+
     step_by_name = {s.name: s for s in pipeline.steps}
 
-    # Phase 1: resolve all codec URIs to local paths.
-    wasm_paths = {
-        name: resolve_uri(step_by_name[name].src, force_download=force_download)
-        for name in pipeline.execution_order
-    }
-
-    # Phase 2: create codec wrapper instances (loads signatures from
-    # embedded custom sections).
-    config = wasmtime.Config()
-    config.cache = True
-    engine = wasmtime.Engine(config)
-
+    # Phase 1: resolve all codec_ids to Codec instances.
     codecs: dict[str, Codec] = {}
     for step_name in pipeline.execution_order:
-        wasm_path = wasm_paths[step_name]
-        codec_type = detect_codec_type(wasm_path)
-        if codec_type == "component":
-            codecs[step_name] = ComponentCodec(engine, wasm_path)
-        else:
-            msg = f"Core Wasm codecs are not yet supported: {wasm_path}"
-            raise ValueError(msg)
+        step = step_by_name[step_name]
+        codecs[step_name] = resolver.resolve(step.codec_id)
+
+    # Phase 2: validate wiring references against codec signatures
+    # (step output port checks that were deferred from parse time).
+    _validate_wiring_against_signatures(pipeline, codecs)
 
     # Phase 3: validate all signatures before any component is called.
     _validate_signatures(pipeline, step_by_name, codecs, direction)
@@ -160,11 +150,13 @@ def _execute_forward(
 
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
-        port_map = _forward_port_map(step, value_store, direction)
+        codec = codecs[step_name]
+        encode_only = _get_encode_only_inputs(codec.signature())
+        port_map = _forward_port_map(step, value_store, direction, encode_only)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
-        output_map = codecs[step_name].call(direction, port_map)
+        output_map = codec.call(direction, port_map)
         for port_name, value in output_map:
             value_store[f"{step_name}.{port_name}"] = value
 
@@ -191,13 +183,19 @@ def _execute_inverted(
 
     for step_name in reversed(pipeline.execution_order):
         step = step_by_name[step_name]
-        port_map = _inverted_port_map(step_name, step, value_store, direction)
+        codec = codecs[step_name]
+        sig = codec.signature()
+        encode_only = _get_encode_only_inputs(sig)
+        output_ports = list(sig.get("outputs", {}).keys())
+        port_map = _inverted_port_map(
+            step_name, step, value_store, direction, output_ports, encode_only
+        )
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
-        output_map = codecs[step_name].call(direction, port_map)
+        output_map = codec.call(direction, port_map)
         for port_name, value in output_map:
-            if port_name in step.inputs and port_name not in step.encode_only_inputs:
+            if port_name in step.inputs and port_name not in encode_only:
                 value_store[step.inputs[port_name]] = value
 
     return {
@@ -211,14 +209,16 @@ def _forward_port_map(
     step: StepSpec,
     value_store: dict[str, bytes],
     direction: Direction,
+    encode_only_inputs: set[str],
 ) -> PortMap:
     """Build the port-map for a step in forward execution.
 
-    Iterates step.inputs, omitting encode_only_inputs when direction is decode.
+    Iterates step.inputs, omitting encode_only ports when direction is decode.
+    Encode-only is derived from the codec's signature.
     """
     port_map: PortMap = []
     for port_name, ref_str in step.inputs.items():
-        if direction == "decode" and port_name in step.encode_only_inputs:
+        if direction == "decode" and port_name in encode_only_inputs:
             continue
         port_map.append((port_name, value_store[ref_str]))
     return port_map
@@ -229,25 +229,84 @@ def _inverted_port_map(
     step: StepSpec,
     value_store: dict[str, bytes],
     direction: Direction,
+    output_ports: list[str],
+    encode_only_inputs: set[str],
 ) -> PortMap:
     """Build the port-map for a step in inverted execution.
 
-    The step's forward-direction outputs become its inverted-direction inputs.
-    Inputs wired from constants (non-encode_only) are always included.
-    encode_only_inputs are appended only when calling encode.
+    The step's forward-direction outputs (from signature) become its
+    inverted-direction inputs. Inputs wired from constants (non-encode_only)
+    are always included. encode_only_inputs are appended only when calling
+    encode.
     """
     port_map: PortMap = []
-    for port_name in step.outputs:
+    for port_name in output_ports:
         val = value_store.get(f"{step_name}.{port_name}")
         if val is not None:
             port_map.append((port_name, val))
     for port_name, ref_str in step.inputs.items():
-        if ref_str.startswith("constant.") and port_name not in step.encode_only_inputs:
+        if ref_str.startswith("constant.") and port_name not in encode_only_inputs:
             port_map.append((port_name, value_store[ref_str]))
     if direction == "encode":
-        for port_name in step.encode_only_inputs:
-            port_map.append((port_name, value_store[step.inputs[port_name]]))
+        for port_name in encode_only_inputs:
+            if port_name in step.inputs:
+                port_map.append((port_name, value_store[step.inputs[port_name]]))
     return port_map
+
+
+def _get_encode_only_inputs(signature: dict[str, Any]) -> set[str]:
+    """Derive the set of encode-only input port names from a codec signature."""
+    return {
+        name
+        for name, desc in signature.get("inputs", {}).items()
+        if desc.get("encode_only", False)
+    }
+
+
+def _validate_wiring_against_signatures(
+    pipeline: Pipeline,
+    codecs: Mapping[str, Codec],
+) -> None:
+    """Validate step output port references against codec signatures.
+
+    At parse time, only step existence is checked. This function validates
+    that wiring references to step output ports match actual output ports
+    declared in the codec's signature.
+    """
+    sig_outputs: dict[str, set[str]] = {}
+    for step in pipeline.steps:
+        sig = codecs[step.name].signature()
+        sig_outputs[step.name] = set(sig.get("outputs", {}).keys())
+
+    errors: list[str] = []
+
+    for step in pipeline.steps:
+        for port_name, ref_str in step.inputs.items():
+            ref = WiringRef.parse(ref_str)
+            if ref.kind == "step":
+                available = sig_outputs.get(ref.source, set())
+                if ref.port not in available:
+                    errors.append(
+                        f"Step {step.name!r} input {port_name!r}: "
+                        f"step {ref.source!r} does not declare output port "
+                        f"{ref.port!r} (signature outputs: {sorted(available)})"
+                    )
+
+    for out_name, ref_str in pipeline.outputs.items():
+        ref = WiringRef.parse(ref_str)
+        if ref.kind == "step":
+            available = sig_outputs.get(ref.source, set())
+            if ref.port not in available:
+                errors.append(
+                    f"Pipeline output {out_name!r}: "
+                    f"step {ref.source!r} does not declare output port "
+                    f"{ref.port!r} (signature outputs: {sorted(available)})"
+                )
+
+    if errors:
+        raise ValueError(
+            "Wiring validation against signatures failed:\n" + "\n".join(errors)
+        )
 
 
 def _validate_signatures(
@@ -283,11 +342,12 @@ def _check_input_types(
     direction: str,
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
+    encode_only_inputs: set[str],
 ) -> list[str]:
     """Return type-mismatch error strings for each active wired input."""
     errors: list[str] = []
     for port_name, ref_str in step.inputs.items():
-        if direction == "decode" and port_name in step.encode_only_inputs:
+        if direction == "decode" and port_name in encode_only_inputs:
             continue
         if port_name not in signature_inputs:
             continue
@@ -319,11 +379,12 @@ def _validate_signature(
     """Verify a step's port declarations against a codec signature.
 
     Each check is a subset check — the step need not use every port the codec
-    declares. Input validation is direction-aware: encode_only ports are
-    excluded from the valid input set when direction is "decode".
+    declares. Input validation is direction-aware: encode_only ports (from
+    the signature) are excluded from the valid input set when direction is
+    "decode".
 
     Args:
-        step: Step whose declared inputs and outputs are being checked.
+        step: Step whose declared inputs are being checked.
         signature: The codec signature dict (from ``codec.signature()``).
         direction: Runtime execution direction ("encode" or "decode").
         pipeline: The pipeline, used to resolve input and constant types.
@@ -346,6 +407,8 @@ def _validate_signature(
             if "type" not in d
         )
 
+        encode_only_ports = _get_encode_only_inputs(signature)
+
         if direction == "decode":
             valid_inputs = {
                 name
@@ -355,7 +418,7 @@ def _validate_signature(
         else:
             valid_inputs = set(signature_inputs.keys())
 
-        active_inputs = set(step.inputs.keys()) - set(step.encode_only_inputs)
+        active_inputs = set(step.inputs.keys()) - encode_only_ports
         unknown = active_inputs - valid_inputs
         if unknown:
             errors.append(
@@ -365,7 +428,12 @@ def _validate_signature(
 
         errors.extend(
             _check_input_types(
-                step, signature_inputs, direction, pipeline, step_output_types
+                step,
+                signature_inputs,
+                direction,
+                pipeline,
+                step_output_types,
+                encode_only_ports,
             )
         )
 
@@ -375,15 +443,6 @@ def _validate_signature(
             for p, d in signature["outputs"].items()
             if "type" not in d
         )
-
-        signature_outputs = set(signature["outputs"].keys())
-        declared_outputs = set(step.outputs)
-        unknown_outputs = declared_outputs - signature_outputs
-        if unknown_outputs:
-            errors.append(
-                f"outputs {sorted(unknown_outputs)} are not valid signature outputs "
-                f"{sorted(signature_outputs)}"
-            )
 
     if errors:
         joined = "; ".join(errors)
