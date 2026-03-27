@@ -8,8 +8,8 @@ import pytest
 
 from chonkle.codecs._base import Codec, PortMap
 from chonkle.codecs.core import CoreWasmCodec, CoreWasmRef
-from chonkle.executor import PreparedPipeline, prepare, run
-from chonkle.pipeline import Direction, Pipeline
+from chonkle.executor import run
+from chonkle.pipeline import Direction, Pipeline, PreparedPipeline, prepare
 from chonkle.resolver import Resolver
 from chonkle.wasm_signature import embed_signature
 
@@ -433,47 +433,43 @@ class TestResolverIntegration:
         }
         wasm_file.write_bytes(_wasm_with_signature(sig))
 
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "some-codec",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
 
         resolver = Resolver(paths={"some-codec": wasm_file})
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_unresolvable_codec_raises(self) -> None:
         """A codec_id with no available implementation raises ValueError."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "nonexistent-codec",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "nonexistent-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
 
         resolver = Resolver(codec_store=Path("/nonexistent"))
         with pytest.raises(ValueError, match="No codec implementation found"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
 
 class TestSignatureValidation:
@@ -486,8 +482,8 @@ class TestSignatureValidation:
         direction: str = "encode",
         step_inputs: dict | None = None,
         pipeline_output_ref: str = "s.bytes",
-    ) -> Pipeline:
-        """Build a single-step pipeline for signature validation tests."""
+    ) -> dict:
+        """Build a single-step pipeline dict for signature validation tests."""
         if step_inputs is None:
             step_inputs = {"bytes": "input.bytes"}
         pipeline_input_names = list(
@@ -500,21 +496,19 @@ class TestSignatureValidation:
         pipeline_inputs = {
             name: {"type": "bytes"} for name in (pipeline_input_names or ["bytes"])
         }
-        return Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": direction,
-                "inputs": pipeline_inputs,
-                "constants": {},
-                "outputs": {"bytes": pipeline_output_ref},
-                "steps": {
-                    "s": {
-                        "codec_id": codec_id,
-                        "inputs": step_inputs,
-                    }
-                },
-            }
-        )
+        return {
+            "codec_id": "test",
+            "direction": direction,
+            "inputs": pipeline_inputs,
+            "constants": {},
+            "outputs": {"bytes": pipeline_output_ref},
+            "steps": {
+                "s": {
+                    "codec_id": codec_id,
+                    "inputs": step_inputs,
+                }
+            },
+        }
 
     def _resolver(self, codec_id: str, wasm_file: Path) -> Resolver:
         return Resolver(paths={codec_id: wasm_file})
@@ -527,11 +521,11 @@ class TestSignatureValidation:
             "outputs": {"wrong_port": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="does not declare output port"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_matching_signature_does_not_raise(self, tmp_path: Path) -> None:
         """A signature matching declared ports does not raise."""
@@ -544,12 +538,12 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline(
+        data = self._make_pipeline(
             step_inputs={"bytes": "input.bytes"},
         )
         resolver = self._resolver("some-codec", wasm_file)
 
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_signature_unknown_input_raises(self, tmp_path: Path) -> None:
@@ -560,13 +554,13 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline(
+        data = self._make_pipeline(
             step_inputs={"wrong": "input.bytes"},
         )
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="not valid signature encode inputs"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_signature_encode_only_excluded_during_decode(self, tmp_path: Path) -> None:
         """encode_only inputs are excluded from valid decode inputs; no raise."""
@@ -579,13 +573,13 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline(
+        data = self._make_pipeline(
             direction="decode",
             step_inputs={"bytes": "input.bytes", "level": "input.bytes"},
         )
         resolver = self._resolver("some-codec", wasm_file)
 
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "decode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_signature_subset_output_passes(self, tmp_path: Path) -> None:
@@ -596,10 +590,10 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}, "checksum": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_signature_outputs_key_absent_skips_check(self, tmp_path: Path) -> None:
@@ -613,8 +607,8 @@ class TestSignatureValidation:
         # the signature has no outputs key (empty set, not missing step).
         # The pipeline output ref "s.bytes" won't match but the wiring
         # validation catches it. Use an input passthrough instead.
-        pipeline2 = self._make_pipeline(pipeline_output_ref="input.bytes")
-        prepared = prepare(pipeline2, pipeline2.direction, resolver=resolver)
+        data = self._make_pipeline(pipeline_output_ref="input.bytes")
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_signature_inputs_key_absent_skips_check(self, tmp_path: Path) -> None:
@@ -622,10 +616,10 @@ class TestSignatureValidation:
         wasm_file = tmp_path / "codec.wasm"
         signature = {"outputs": {"bytes": {"type": "bytes"}}}
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_signature_both_wrong_reports_both(self, tmp_path: Path) -> None:
@@ -636,23 +630,23 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline(
+        data = self._make_pipeline(
             step_inputs={"bad_in": "input.bytes"},
         )
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="not valid signature encode inputs"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_missing_signature_raises(self, tmp_path: Path) -> None:
         """A .wasm with no embedded chonkle:signature section raises ValueError."""
         wasm_file = tmp_path / "codec.wasm"
         wasm_file.write_bytes(_CM_HEADER)
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="chonkle:signature"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_two_steps_both_wrong_reports_both(self, tmp_path: Path) -> None:
         """Signature errors from multiple steps are all reported in one exception."""
@@ -665,25 +659,23 @@ class TestSignatureValidation:
         wasm_a.write_bytes(_wasm_with_signature(signature))
         wasm_b.write_bytes(_wasm_with_signature(signature))
 
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "step_b.bytes"},
-                "steps": {
-                    "step_a": {
-                        "codec_id": "codec-a",
-                        "inputs": {"bad_a": "input.bytes"},
-                    },
-                    "step_b": {
-                        "codec_id": "codec-b",
-                        "inputs": {"bad_b": "step_a.bytes"},
-                    },
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_b.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "codec-a",
+                    "inputs": {"bad_a": "input.bytes"},
                 },
-            }
-        )
+                "step_b": {
+                    "codec_id": "codec-b",
+                    "inputs": {"bad_b": "step_a.bytes"},
+                },
+            },
+        }
 
         resolver = Resolver(
             paths={
@@ -693,7 +685,7 @@ class TestSignatureValidation:
         )
 
         with pytest.raises(ValueError, match="step_a") as exc_info:
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
         assert "step_b" in str(exc_info.value)
 
@@ -705,11 +697,11 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="missing required 'type' field"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_signature_output_port_missing_type_raises(self, tmp_path: Path) -> None:
         """A signature output port without a 'type' field raises ValueError."""
@@ -719,11 +711,11 @@ class TestSignatureValidation:
             "outputs": {"bytes": {}},  # no "type"
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="missing required 'type' field"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_type_mismatch_pipeline_input_raises(self, tmp_path: Path) -> None:
         """Pipeline input type mismatch against codec signature raises ValueError."""
@@ -733,25 +725,23 @@ class TestSignatureValidation:
             "outputs": {"data": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"data": {"type": "int"}},
-                "constants": {},
-                "outputs": {"data": "s.data"},
-                "steps": {
-                    "s": {
-                        "codec_id": "some-codec",
-                        "inputs": {"data": "input.data"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"data": {"type": "int"}},
+            "constants": {},
+            "outputs": {"data": "s.data"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"data": "input.data"},
+                }
+            },
+        }
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="provides type"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_type_mismatch_constant_raises(self, tmp_path: Path) -> None:
         """Constant type mismatch against codec signature raises ValueError."""
@@ -764,25 +754,23 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {"level": {"type": "int", "value": 3}},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "some-codec",
-                        "inputs": {"bytes": "input.bytes", "level": "constant.level"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {"level": {"type": "int", "value": 3}},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes", "level": "constant.level"},
+                }
+            },
+        }
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="provides type"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_type_mismatch_step_output_raises(self, tmp_path: Path) -> None:
         """Step output type mismatch against downstream codec input raises."""
@@ -799,25 +787,23 @@ class TestSignatureValidation:
         wasm_a.write_bytes(_wasm_with_signature(sig_a))
         wasm_b.write_bytes(_wasm_with_signature(sig_b))
 
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "step_b.bytes"},
-                "steps": {
-                    "step_a": {
-                        "codec_id": "codec-a",
-                        "inputs": {"bytes": "input.bytes"},
-                    },
-                    "step_b": {
-                        "codec_id": "codec-b",
-                        "inputs": {"bytes": "step_a.bytes"},
-                    },
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_b.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "codec-a",
+                    "inputs": {"bytes": "input.bytes"},
                 },
-            }
-        )
+                "step_b": {
+                    "codec_id": "codec-b",
+                    "inputs": {"bytes": "step_a.bytes"},
+                },
+            },
+        }
 
         resolver = Resolver(
             paths={
@@ -827,7 +813,7 @@ class TestSignatureValidation:
         )
 
         with pytest.raises(ValueError, match="provides type"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
     def test_type_match_passes(self, tmp_path: Path) -> None:
         """Matching types across pipeline input and codec signature do not raise."""
@@ -837,10 +823,10 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = self._make_pipeline()
+        data = self._make_pipeline()
         resolver = self._resolver("some-codec", wasm_file)
 
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_missing_type_in_source_skips_check(self, tmp_path: Path) -> None:
@@ -851,24 +837,22 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {}},
-                "constants": {},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "some-codec",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
         resolver = self._resolver("some-codec", wasm_file)
 
-        prepared = prepare(pipeline, pipeline.direction, resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert "s" in prepared.codecs
 
     def test_step_output_port_wiring_validated(self, tmp_path: Path) -> None:
@@ -879,25 +863,23 @@ class TestSignatureValidation:
             "outputs": {"bytes": {"type": "bytes"}},
         }
         wasm_file.write_bytes(_wasm_with_signature(signature))
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"out": "s.missing_port"},
-                "steps": {
-                    "s": {
-                        "codec_id": "some-codec",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"out": "s.missing_port"},
+            "steps": {
+                "s": {
+                    "codec_id": "some-codec",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
         resolver = self._resolver("some-codec", wasm_file)
 
         with pytest.raises(ValueError, match="does not declare output port"):
-            prepare(pipeline, pipeline.direction, resolver=resolver)
+            prepare(data, "encode", resolver=resolver)
 
 
 class TestInvertedExecution:
@@ -1157,8 +1139,9 @@ class TestPageSplitFanOut:
         page_split_pipeline_json["constants"]["rep_length"]["value"] = rep_length
         page_split_pipeline_json["constants"]["def_length"]["value"] = def_length
 
-        pipeline = Pipeline.parse(page_split_pipeline_json)
-        prepared = prepare(pipeline, pipeline.direction)
+        prepared = prepare(
+            page_split_pipeline_json, page_split_pipeline_json["direction"]
+        )
         result = run(prepared, {"bytes": data})
 
         assert set(result.keys()) == {"rep_levels", "def_levels", "data"}
@@ -1176,8 +1159,9 @@ class TestPageSplitFanOut:
         page_split_pipeline_json["constants"]["rep_length"]["value"] = rep_length
         page_split_pipeline_json["constants"]["def_length"]["value"] = def_length
 
-        pipeline = Pipeline.parse(page_split_pipeline_json)
-        prepared = prepare(pipeline, pipeline.direction)
+        prepared = prepare(
+            page_split_pipeline_json, page_split_pipeline_json["direction"]
+        )
         result = run(prepared, {"bytes": data})
 
         assert len(result["rep_levels"]) == rep_length
@@ -1191,94 +1175,86 @@ class TestCoreWasmPipeline:
 
     def test_single_step_core_encode(self, raw_chunk: bytes) -> None:
         """A single core wasm identity step produces identical output on encode."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "encode", resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         assert prepared.codecs["s"].codec_type == "core"
         result = run(prepared, {"bytes": raw_chunk})
         assert result["bytes"] == raw_chunk
 
     def test_single_step_core_decode(self, raw_chunk: bytes) -> None:
         """A single core wasm identity step produces identical output on decode."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "decode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "decode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "decode", resolver=resolver)
+        prepared = prepare(data, "decode", resolver=resolver)
         result = run(prepared, {"bytes": raw_chunk})
         assert result["bytes"] == raw_chunk
 
     def test_two_step_core_pipeline(self, raw_chunk: bytes) -> None:
         """Two sequential core wasm identity steps route data correctly."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "step_b.bytes"},
-                "steps": {
-                    "step_a": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    },
-                    "step_b": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "step_a.bytes"},
-                    },
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_b.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
                 },
-            }
-        )
+                "step_b": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "step_a.bytes"},
+                },
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "encode", resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         result = run(prepared, {"bytes": raw_chunk})
         assert result["bytes"] == raw_chunk
 
     def test_inverted_core_pipeline(self, raw_chunk: bytes) -> None:
         """An inverted core wasm pipeline produces identical output."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "decode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "s.bytes"},
-                "steps": {
-                    "s": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    }
-                },
-            }
-        )
+        data = {
+            "codec_id": "test",
+            "direction": "decode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "s.bytes"},
+            "steps": {
+                "s": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
+                }
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "encode", resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         result = run(prepared, {"bytes": raw_chunk})
         assert result["bytes"] == raw_chunk
 
@@ -1304,8 +1280,9 @@ class TestCogChunkPipeline:
         cog_codec_resolver: Resolver,
     ) -> None:
         """Decode-declared pipeline forward decode: output is 1024x1024x2 bytes."""
-        pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        prepared = prepare(pipeline, "decode", resolver=cog_codec_resolver)
+        prepared = prepare(
+            cog_decode_pipeline_json, "decode", resolver=cog_codec_resolver
+        )
         result = run(prepared, {"bytes": cog_chunk})
         assert len(result["bytes"]) == self._TILE_BYTES
 
@@ -1316,8 +1293,9 @@ class TestCogChunkPipeline:
         cog_codec_resolver: Resolver,
     ) -> None:
         """Decode-declared pipeline running forward decode returns a bytes object."""
-        pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        prepared = prepare(pipeline, "decode", resolver=cog_codec_resolver)
+        prepared = prepare(
+            cog_decode_pipeline_json, "decode", resolver=cog_codec_resolver
+        )
         result = run(prepared, {"bytes": cog_chunk})
         assert isinstance(result["bytes"], bytes)
 
@@ -1328,8 +1306,9 @@ class TestCogChunkPipeline:
         cog_codec_resolver: Resolver,
     ) -> None:
         """Encode-declared pipeline inverted decode: output is 1024x1024x2 bytes."""
-        pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        prepared = prepare(pipeline, "decode", resolver=cog_codec_resolver)
+        prepared = prepare(
+            cog_encode_pipeline_json, "decode", resolver=cog_codec_resolver
+        )
         result = run(prepared, {"bytes": cog_chunk})
         assert len(result["bytes"]) == self._TILE_BYTES
 
@@ -1340,8 +1319,9 @@ class TestCogChunkPipeline:
         cog_codec_resolver: Resolver,
     ) -> None:
         """Encode-declared pipeline running inverted decode returns a bytes object."""
-        pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        prepared = prepare(pipeline, "decode", resolver=cog_codec_resolver)
+        prepared = prepare(
+            cog_encode_pipeline_json, "decode", resolver=cog_codec_resolver
+        )
         result = run(prepared, {"bytes": cog_chunk})
         assert isinstance(result["bytes"], bytes)
 
@@ -1355,10 +1335,13 @@ class TestCogChunkPipeline:
         tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
             : self._TILE_BYTES
         ]
-        pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        enc_prepared = prepare(pipeline, "encode", resolver=cog_codec_resolver)
+        enc_prepared = prepare(
+            cog_decode_pipeline_json, "encode", resolver=cog_codec_resolver
+        )
         encoded = run(enc_prepared, {"bytes": tile})
-        dec_prepared = prepare(pipeline, "decode", resolver=cog_codec_resolver)
+        dec_prepared = prepare(
+            cog_decode_pipeline_json, "decode", resolver=cog_codec_resolver
+        )
         decoded = run(dec_prepared, {"bytes": encoded["bytes"]})
         assert decoded["bytes"] == tile
 
@@ -1372,10 +1355,13 @@ class TestCogChunkPipeline:
         tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
             : self._TILE_BYTES
         ]
-        pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        enc_prepared = prepare(pipeline, "encode", resolver=cog_codec_resolver)
+        enc_prepared = prepare(
+            cog_encode_pipeline_json, "encode", resolver=cog_codec_resolver
+        )
         encoded = run(enc_prepared, {"bytes": tile})
-        dec_prepared = prepare(pipeline, "decode", resolver=cog_codec_resolver)
+        dec_prepared = prepare(
+            cog_encode_pipeline_json, "decode", resolver=cog_codec_resolver
+        )
         decoded = run(dec_prepared, {"bytes": encoded["bytes"]})
         assert decoded["bytes"] == tile
 
@@ -1388,10 +1374,8 @@ class TestCogChunkPipeline:
     ) -> None:
         """Encode-declared pipeline inverted decode yields the same raw tile
         as decode-declared pipeline forward decode."""
-        decode_pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        encode_pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        fwd = prepare(decode_pipeline, "decode", resolver=cog_codec_resolver)
-        inv = prepare(encode_pipeline, "decode", resolver=cog_codec_resolver)
+        fwd = prepare(cog_decode_pipeline_json, "decode", resolver=cog_codec_resolver)
+        inv = prepare(cog_encode_pipeline_json, "decode", resolver=cog_codec_resolver)
         forward = run(fwd, {"bytes": cog_chunk})
         inverted = run(inv, {"bytes": cog_chunk})
         assert inverted["bytes"] == forward["bytes"]
@@ -1408,10 +1392,8 @@ class TestCogChunkPipeline:
         tile = (raw_chunk * ((self._TILE_BYTES // len(raw_chunk)) + 1))[
             : self._TILE_BYTES
         ]
-        decode_pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        encode_pipeline = Pipeline.parse(cog_encode_pipeline_json)
-        inv = prepare(decode_pipeline, "encode", resolver=cog_codec_resolver)
-        fwd = prepare(encode_pipeline, "encode", resolver=cog_codec_resolver)
+        inv = prepare(cog_decode_pipeline_json, "encode", resolver=cog_codec_resolver)
+        fwd = prepare(cog_encode_pipeline_json, "encode", resolver=cog_codec_resolver)
         inverted = run(inv, {"bytes": tile})
         forward = run(fwd, {"bytes": tile})
         assert inverted["bytes"] == forward["bytes"]
@@ -1548,27 +1530,25 @@ class TestSingleCopyCorePipeline:
     def test_two_step_core_returns_correct_output(self, raw_chunk: bytes) -> None:
         """Two sequential core identity steps produce correct output via
         deferred CoreWasmRef values in the value store."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "step_b.bytes"},
-                "steps": {
-                    "step_a": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    },
-                    "step_b": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "step_a.bytes"},
-                    },
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_b.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
                 },
-            }
-        )
+                "step_b": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "step_a.bytes"},
+                },
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "encode", resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
 
         assert isinstance(prepared.codecs["step_a"], CoreWasmCodec)
         assert isinstance(prepared.codecs["step_b"], CoreWasmCodec)
@@ -1591,56 +1571,52 @@ class TestSingleCopyCorePipeline:
 
     def test_three_step_core_chain(self, raw_chunk: bytes) -> None:
         """Three sequential core identity steps chain correctly."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "encode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "step_c.bytes"},
-                "steps": {
-                    "step_a": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    },
-                    "step_b": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "step_a.bytes"},
-                    },
-                    "step_c": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "step_b.bytes"},
-                    },
+        data = {
+            "codec_id": "test",
+            "direction": "encode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_c.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
                 },
-            }
-        )
+                "step_b": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "step_a.bytes"},
+                },
+                "step_c": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "step_b.bytes"},
+                },
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "encode", resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         result = run(prepared, {"bytes": raw_chunk})
         assert result["bytes"] == raw_chunk
 
     def test_inverted_two_step_core_pipeline(self, raw_chunk: bytes) -> None:
         """Inverted execution through two core identity steps works correctly."""
-        pipeline = Pipeline.parse(
-            {
-                "codec_id": "test",
-                "direction": "decode",
-                "inputs": {"bytes": {"type": "bytes"}},
-                "constants": {},
-                "outputs": {"bytes": "step_b.bytes"},
-                "steps": {
-                    "step_a": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "input.bytes"},
-                    },
-                    "step_b": {
-                        "codec_id": "identity",
-                        "inputs": {"bytes": "step_a.bytes"},
-                    },
+        data = {
+            "codec_id": "test",
+            "direction": "decode",
+            "inputs": {"bytes": {"type": "bytes"}},
+            "constants": {},
+            "outputs": {"bytes": "step_b.bytes"},
+            "steps": {
+                "step_a": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "input.bytes"},
                 },
-            }
-        )
+                "step_b": {
+                    "codec_id": "identity",
+                    "inputs": {"bytes": "step_a.bytes"},
+                },
+            },
+        }
         resolver = Resolver(paths={"identity": _CORE_IDENTITY_WASM})
-        prepared = prepare(pipeline, "encode", resolver=resolver)
+        prepared = prepare(data, "encode", resolver=resolver)
         result = run(prepared, {"bytes": raw_chunk})
         assert result["bytes"] == raw_chunk

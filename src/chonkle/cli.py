@@ -4,9 +4,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
-from chonkle.executor import prepare, run
-from chonkle.pipeline import Pipeline
+from chonkle.executor import run
+from chonkle.pipeline import Direction, prepare
 from chonkle.resolver import Resolver
 from chonkle.wasm_signature import embed_signature
 
@@ -118,7 +119,9 @@ def main() -> None:
         _embed_signature_command(args)
 
 
-def _build_resolver(args: argparse.Namespace, pipeline: Pipeline) -> Resolver:
+def _build_resolver(
+    args: argparse.Namespace, pipeline_sources: dict[str, str]
+) -> Resolver:
     """Build a Resolver from CLI flags and pipeline sources."""
     preference = args.preference.split(",") if args.preference else None
 
@@ -134,13 +137,14 @@ def _build_resolver(args: argparse.Namespace, pipeline: Pipeline) -> Resolver:
         codec_store=args.codec_store,
         preference=preference,
         overrides=overrides,
-        pipeline_sources=pipeline.sources,
+        pipeline_sources=pipeline_sources,
     )
 
 
 def _run_command(args: argparse.Namespace) -> None:
     """Execute a pipeline and write or report outputs."""
-    pipeline = Pipeline.parse(args.pipeline)
+    with args.pipeline.open() as f:
+        pipeline_json: dict[str, Any] = json.load(f)
 
     inputs: dict[str, bytes] = {}
     for spec in args.inputs:
@@ -150,9 +154,13 @@ def _run_command(args: argparse.Namespace) -> None:
         name, path = spec.split("=", 1)
         inputs[name] = Path(path).read_bytes()
 
-    direction = args.direction if args.direction is not None else pipeline.direction
-    resolver = _build_resolver(args, pipeline)
-    prepared = prepare(pipeline, direction, resolver=resolver)
+    raw_direction = args.direction or pipeline_json.get("direction")
+    if raw_direction not in ("encode", "decode"):
+        sys.stderr.write(f"Invalid or missing direction: {raw_direction!r}\n")
+        sys.exit(1)
+    direction: Direction = raw_direction
+    resolver = _build_resolver(args, pipeline_json.get("sources", {}))
+    prepared = prepare(pipeline_json, direction, resolver=resolver)
     result = run(prepared, inputs)
 
     requested_outputs: dict[str, str] = {}

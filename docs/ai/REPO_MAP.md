@@ -49,12 +49,14 @@ its build source. `codec/README.md` documents the build process for each codec.
 ## Source — `src/chonkle/`
 
 Core library. `__init__.py` files are docstring-only; import from the
-defining module directly (e.g. `from chonkle.executor import prepare`).
+defining module directly (e.g. `from chonkle.pipeline import prepare`).
 
-- **pipeline.py** — DAG pipeline parsing and validation. Entry point: `parse()`.
-  Parses pipeline JSON into a `Pipeline` dataclass, validates all wiring
-  references, and produces a topologically sorted `execution_order`.
-  Key types: `Pipeline`, `StepSpec`, `WiringRef`.
+- **pipeline.py** — DAG pipeline parsing, validation, and preparation. Entry
+  point: `prepare(source, direction, *, resolver=None)` → `PreparedPipeline`.
+  Parses pipeline JSON into a `Pipeline` dataclass, validates wiring
+  references, topologically sorts steps, resolves codec_ids via `Resolver`,
+  validates wiring against codec signatures, and validates all step signatures.
+  Key types: `Pipeline`, `PreparedPipeline`, `StepSpec`, `WiringRef`.
 - **codecs/** — Codec wrapper package. `__init__.py` is docstring-only;
   import from submodules directly. Submodules:
   - **codecs/_base.py** — `Codec` ABC with `call(direction, port_map)` and
@@ -80,16 +82,13 @@ defining module directly (e.g. `from chonkle.executor import prepare`).
   `_has_native_signature()` checks for bundled native signatures.
   `list_codecs()` includes both wasm and native entries.
   Key types: `Resolver`, `CodecEntry`.
-- **executor.py** — DAG preparation and execution via `Codec` wrappers. Entry
-  points: `prepare(pipeline, direction, *, resolver=None)` → `PreparedPipeline`,
-  `run(prepared, inputs)` → output dict. `prepare()` resolves codec_ids via
-  `Resolver`, validates wiring against signatures (deferred output port checks),
-  and validates all signatures. `run()` executes the DAG. `value_store` holds
+- **executor.py** — DAG execution via `Codec` wrappers. Entry point:
+  `run(prepared, inputs)` → output dict. Executes the DAG via
+  `_execute_forward` / `_execute_inverted`. `value_store` holds
   `bytes | CoreWasmRef`; port-map builders materialize refs for non-core
   codecs, pass through for core codecs. `_materialize()` resolves final
-  outputs. Encode-only inputs are derived from codec signatures. Key internals:
-  `PreparedPipeline`, `value_store`, `_forward_port_map`, `_inverted_port_map`,
-  `_materialize`, `_get_encode_only_inputs`, `_validate_wiring_against_signatures`.
+  outputs. Key internals: `value_store`, `_forward_port_map`,
+  `_inverted_port_map`, `_materialize`.
 - **wasm_download.py** — codec URI resolution and fetch cache. `resolve_uri()`
   handles `file://`, `https://`, and `oci://`. Downloads only the `.wasm` file
   (signatures are embedded). `download_https()` and `download_oci()` store

@@ -8,8 +8,8 @@ import pytest
 
 from chonkle.codecs._base import Codec, PortMap
 from chonkle.codecs.native import NativeCodec
-from chonkle.executor import PreparedPipeline, run
-from chonkle.pipeline import Direction, Pipeline
+from chonkle.executor import run
+from chonkle.pipeline import Direction, Pipeline, PreparedPipeline
 from chonkle.resolver import Resolver
 
 numcodecs = pytest.importorskip("numcodecs")

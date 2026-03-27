@@ -13,8 +13,10 @@ Part of the NASA-IMPACT VEDA / cylf-dev ecosystem for satellite imagery processi
 
 Pipeline DAG design where each execution is driven by a pipeline JSON file:
 
-- **Parsing**: `pipeline.py` parses JSON into a validated `Pipeline` dataclass
-  with topologically sorted steps
+- **Parsing and preparation**: `pipeline.py` parses JSON into a validated
+  `Pipeline` dataclass with topologically sorted steps, resolves codec_ids
+  via `Resolver`, validates wiring against codec signatures, and returns a
+  `PreparedPipeline`. Single entry point: `prepare(source, direction)`
 - **Codec wrapper classes** (`codecs/`): `Codec` ABC normalizes different
   backends. `ComponentCodec` wraps a Component Model component.
   `CoreWasmCodec` wraps a core wasm32-wasi reactor module using the binary
@@ -43,10 +45,6 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   Native codecs are discovered from bundled signature files. Backend
   preference system selects among multiple implementations. Key types:
   `Resolver`, `CodecEntry`.
-- **Preparation** (`executor.py`): `prepare()` resolves codec_ids via
-  `Resolver`, validates wiring against codec signatures (deferred output port
-  checks), validates all signatures, and returns a `PreparedPipeline`.
-  Validation failures are reported before any codec is called.
 - **Execution** (`executor.py`): `run()` takes a `PreparedPipeline` and inputs,
   executes the DAG by calling `codec.call(direction, port_map)` for each step.
   Data flows between steps through `value_store: dict[str, bytes | CoreWasmRef]`
@@ -66,7 +64,7 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   deferred.
 - **Direction**: `pipeline.direction` records which direction the DAG was authored
   in (by convention, `"decode"`). The caller always specifies a runtime direction
-  when calling `prepare()`. When `direction == pipeline.direction`, execution is
+  when calling `prepare()` / `run()`. When `direction == pipeline.direction`, execution is
   forward (current order, `encode`/`decode` function). When they differ, execution
   is inverted: steps run in reversed topological order, the opposite function is
   called, `value_store` is seeded from `pipeline.outputs`, and results are
@@ -74,9 +72,14 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
 
 ## Subsystems
 
-- **pipeline** (`pipeline.py`): parse pipeline JSON, validate wiring references,
-  topological sort (Kahn's algorithm). Entry points: `parse()`. Key types:
-  `Pipeline`, `StepSpec`, `WiringRef`
+- **pipeline** (`pipeline.py`): parse, validate, and prepare pipelines for
+  execution. Entry point: `prepare(source, direction, *, resolver=None)` →
+  `PreparedPipeline`. Internally: `Pipeline.parse()` (structural validation,
+  wiring refs, topological sort via Kahn's algorithm), codec resolution via
+  `Resolver`, wiring validation against codec signatures, signature
+  validation. `_get_encode_only_inputs()` derives encode-only ports from
+  codec signatures (also used by executor). Key types: `Pipeline`,
+  `PreparedPipeline`, `StepSpec`, `WiringRef`
 - **codecs** (`codecs/`): codec wrapper package. `Codec` ABC defines the
   `call(direction, port_map)` and `signature()` interface. `ComponentCodec`
   wraps a Wasmtime Component Model component (instantiation, WIT function
@@ -103,20 +106,13 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   store directory. `_has_native_signature()` checks for bundled native
   signatures. `list_codecs()` includes both wasm and native entries.
   `CodecEntry` holds store metadata. Key types: `Resolver`, `CodecEntry`.
-- **executor** (`executor.py`): prepare and execute a `Pipeline` via `Codec`
-  wrappers. Entry points: `prepare(pipeline, direction, *, resolver=None)` →
-  `PreparedPipeline`, `run(prepared, inputs)` → outputs. `prepare()` phases:
-  codec resolution (via `Resolver`), wiring validation against codec signatures
-  (`_validate_wiring_against_signatures()`), signature validation
-  (`_validate_signatures()`). `run()` phases: `_execute_forward()` /
+- **executor** (`executor.py`): execute a prepared pipeline. Entry point:
+  `run(prepared, inputs)` → outputs. `_execute_forward()` /
   `_execute_inverted()` (split by direction, both use
   `value_store: dict[str, bytes | CoreWasmRef]`), `_forward_port_map()` /
   `_inverted_port_map()` (build port-maps from value_store, materializing
   `CoreWasmRef` for non-core codecs, passing through for core codecs).
-  `_materialize()` resolves deferred refs to bytes for final outputs.
-  `_get_encode_only_inputs()` derives encode-only ports from codec signatures.
-  `_validate_signature()` (per-step signature checker), `_check_input_types()`
-  (cross-step type compatibility). Key type: `PreparedPipeline`
+  `_materialize()` resolves deferred refs to bytes for final outputs
 - **wasm_download** (`wasm_download.py`): resolve codec URIs to local paths and
   cache remote downloads. `resolve_uri()` handles `file://`, `https://`, and
   `oci://`. Downloads only the `.wasm` file (signatures are embedded as custom

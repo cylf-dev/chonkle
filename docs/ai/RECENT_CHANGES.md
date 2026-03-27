@@ -4,6 +4,16 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **Merged parse and prepare into single entry point**: `prepare()`,
+  `PreparedPipeline`, and all validation functions moved from `executor.py`
+  to `pipeline.py`. Callers now use `prepare(source, direction) → run()` instead
+  of `Pipeline.parse() → prepare() → run()`. `Pipeline.parse()` remains as an
+  internal classmethod. `executor.py` retains only `run()` and DAG execution
+  helpers. `Codec` import in `pipeline.py` uses `TYPE_CHECKING` and `Resolver`
+  uses a lazy import inside `prepare()` to avoid circular imports. Updated
+  `cli.py`, `test_executor.py`, `test_native_codec.py`, and
+  `bench/chonkle-host/time_codec.py`.
+
 - **`tools/` package removed**: `embed_signature` CLI moved from
   `python -m chonkle.tools.embed_signature` to `chonkle embed-signature`
   subcommand in `cli.py`. The `src/chonkle/tools/` package is deleted.
