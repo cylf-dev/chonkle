@@ -2,7 +2,7 @@
 
 import pytest
 
-from chonkle.pipeline import Pipeline, WiringRef
+from chonkle.pipeline import ConstantDescriptor, Pipeline, WiringRef
 
 
 class TestParseRef:
@@ -85,8 +85,8 @@ class TestParsePipeline:
     def test_dag_pipeline_constants(self, page_split_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(page_split_pipeline_json)
         assert pipeline.constants == {
-            "rep_length": {"type": "uint", "value": 128},
-            "def_length": {"type": "uint", "value": 256},
+            "rep_length": ConstantDescriptor(type="uint", value=128),
+            "def_length": ConstantDescriptor(type="uint", value=256),
         }
 
     def test_dag_pipeline_outputs(self, page_split_pipeline_json: dict) -> None:

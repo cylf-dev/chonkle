@@ -46,7 +46,7 @@ def run(
         required = [
             name
             for name, desc in pipeline.inputs.items()
-            if direction == "encode" or not desc.get("encode_only", False)
+            if direction == "encode" or not desc.encode_only
         ]
         for name in required:
             if name not in inputs:
@@ -82,12 +82,12 @@ def _execute_forward(
     value_store: dict[str, bytes | CoreWasmRef] = {}
 
     for name, descriptor in pipeline.constants.items():
-        value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
+        value_store[f"constant.{name}"] = json.dumps(descriptor.value).encode()
 
     active_inputs = [
         name
         for name, desc in pipeline.inputs.items()
-        if direction == "encode" or not desc.get("encode_only", False)
+        if direction == "encode" or not desc.encode_only
     ]
     for name in active_inputs:
         value_store[f"input.{name}"] = inputs[name]
@@ -121,7 +121,7 @@ def _execute_inverted(
     value_store: dict[str, bytes | CoreWasmRef] = {}
 
     for name, descriptor in pipeline.constants.items():
-        value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
+        value_store[f"constant.{name}"] = json.dumps(descriptor.value).encode()
 
     for out_name, ref in pipeline.outputs.items():
         value_store[str(ref)] = inputs[out_name]
@@ -146,7 +146,7 @@ def _execute_inverted(
     return {
         name: _materialize(value_store[f"input.{name}"])
         for name, desc in pipeline.inputs.items()
-        if direction == "encode" or not desc.get("encode_only", False)
+        if direction == "encode" or not desc.encode_only
     }
 
 

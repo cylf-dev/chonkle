@@ -16,6 +16,22 @@ if TYPE_CHECKING:
 Direction = Literal["encode", "decode"]
 
 
+@dataclass(frozen=True)
+class InputDescriptor:
+    """Descriptor for a pipeline-level input port."""
+
+    type: str = ""
+    encode_only: bool = False
+
+
+@dataclass(frozen=True)
+class ConstantDescriptor:
+    """Descriptor for a pipeline-level constant."""
+
+    type: str = ""
+    value: Any = None
+
+
 @dataclass
 class WiringRef:
     """A parsed wiring reference from the pipeline JSON."""
@@ -81,8 +97,8 @@ class Pipeline:
 
     codec_id: str
     direction: Direction
-    inputs: dict[str, dict[str, Any]]
-    constants: dict[str, dict[str, Any]]
+    inputs: dict[str, InputDescriptor]
+    constants: dict[str, ConstantDescriptor]
     outputs: dict[str, WiringRef]  # pipeline_output_name -> parsed wiring ref
     sources: dict[str, str]  # codec_id -> URI (advisory fetch hints)
     steps: list[StepSpec]
@@ -126,8 +142,16 @@ class Pipeline:
         if not isinstance(codec_id, str):
             msg = f"'codec_id' must be a string, got {codec_id!r}"
             raise ValueError(msg)
-        inputs = dict(data.get("inputs", {}))
-        constants = dict(data.get("constants", {}))
+        inputs = {
+            k: InputDescriptor(
+                type=v.get("type", ""), encode_only=v.get("encode_only", False)
+            )
+            for k, v in data.get("inputs", {}).items()
+        }
+        constants = {
+            k: ConstantDescriptor(type=v.get("type", ""), value=v.get("value"))
+            for k, v in data.get("constants", {}).items()
+        }
         raw_outputs: dict[str, str] = dict(data.get("outputs", {}))
         sources = dict(data.get("sources", {}))
 
@@ -226,8 +250,8 @@ def prepare(
 
 def _validate_pipeline(
     steps: list[StepSpec],
-    inputs: dict[str, dict[str, Any]],
-    constants: dict[str, dict[str, Any]],
+    inputs: dict[str, InputDescriptor],
+    constants: dict[str, ConstantDescriptor],
     outputs: dict[str, WiringRef],
 ) -> None:
     """Validate step declarations and all wiring references.
@@ -276,8 +300,8 @@ def _validate_pipeline(
 
 
 def _validate_ref(
-    inputs: dict[str, dict[str, Any]],
-    constants: dict[str, dict[str, Any]],
+    inputs: dict[str, InputDescriptor],
+    constants: dict[str, ConstantDescriptor],
     ref: WiringRef,
     context: str,
     step_names: set[str],
@@ -531,9 +555,11 @@ def _check_input_types(
             continue
         ref = step.inputs[port_name]
         if ref.kind == "input":
-            actual_type = (pipeline.inputs.get(ref.port) or {}).get("type")
+            desc = pipeline.inputs.get(ref.port)
+            actual_type = desc.type if desc and desc.type else None
         elif ref.kind == "constant":
-            actual_type = (pipeline.constants.get(ref.port) or {}).get("type")
+            cdesc = pipeline.constants.get(ref.port)
+            actual_type = cdesc.type if cdesc and cdesc.type else None
         else:
             actual_type = step_output_types.get(ref.source, {}).get(ref.port)
         if actual_type is not None and actual_type != expected_type:
