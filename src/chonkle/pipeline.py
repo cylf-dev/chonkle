@@ -136,7 +136,10 @@ class Pipeline:
             )
             steps.append(step)
 
-        pipeline = cls(
+        _validate_pipeline(steps, inputs, constants, outputs)
+        execution_order = _topological_sort(steps)
+
+        return cls(
             codec_id=codec_id,
             direction=direction,
             inputs=inputs,
@@ -144,12 +147,8 @@ class Pipeline:
             outputs=outputs,
             sources=sources,
             steps=steps,
-            execution_order=[],
+            execution_order=execution_order,
         )
-
-        _validate_pipeline(pipeline)
-        pipeline.execution_order = _topological_sort(steps)
-        return pipeline
 
 
 @dataclass
@@ -222,7 +221,12 @@ def prepare(
     )
 
 
-def _validate_pipeline(pipeline: Pipeline) -> None:
+def _validate_pipeline(
+    steps: list[StepSpec],
+    inputs: dict[str, dict[str, Any]],
+    constants: dict[str, dict[str, Any]],
+    outputs: dict[str, str],
+) -> None:
     """Validate step declarations and all wiring references.
 
     Performs the following checks in order:
@@ -239,27 +243,29 @@ def _validate_pipeline(pipeline: Pipeline) -> None:
     Raises:
         ValueError: If any of the above checks fail.
     """
-    step_names = {s.name for s in pipeline.steps}
+    step_names = {s.name for s in steps}
 
     seen: set[str] = set()
-    for step in pipeline.steps:
+    for step in steps:
         if step.name in seen:
             msg = f"Duplicate step name: {step.name!r}"
             raise ValueError(msg)
         seen.add(step.name)
 
-    for step in pipeline.steps:
+    for step in steps:
         for port_name, ref_str in step.inputs.items():
             _check_ref(
-                pipeline,
+                inputs,
+                constants,
                 ref_str,
                 f"step {step.name!r} input {port_name!r}",
                 step_names,
             )
 
-    for out_name, ref_str in pipeline.outputs.items():
+    for out_name, ref_str in outputs.items():
         _check_ref(
-            pipeline,
+            inputs,
+            constants,
             ref_str,
             f"pipeline output {out_name!r}",
             step_names,
@@ -267,7 +273,8 @@ def _validate_pipeline(pipeline: Pipeline) -> None:
 
 
 def _check_ref(
-    pipeline: Pipeline,
+    inputs: dict[str, dict[str, Any]],
+    constants: dict[str, dict[str, Any]],
     ref_str: str,
     context: str,
     step_names: set[str],
@@ -275,13 +282,14 @@ def _check_ref(
     """Validate a single wiring reference against pipeline declarations.
 
     For ``input`` references, confirms the port is declared in
-    ``pipeline.inputs``.  For ``constant`` references, confirms the
-    name is declared in ``pipeline.constants``.  For step references,
-    confirms the step exists.  Output port validation is deferred to
-    ``prepare()`` time where codec signatures are available.
+    *inputs*.  For ``constant`` references, confirms the name is
+    declared in *constants*.  For step references, confirms the step
+    exists.  Output port validation is deferred to ``prepare()`` time
+    where codec signatures are available.
 
     Args:
-        pipeline: Pipeline providing inputs and constants for validation.
+        inputs: Pipeline-level input declarations.
+        constants: Pipeline-level constant declarations.
         ref_str: The raw wiring reference string (e.g.
             ``"input.bytes"`` or ``"zstd_step.bytes"``).
         context: A human-readable label for the reference site,
@@ -293,17 +301,17 @@ def _check_ref(
     """
     ref = WiringRef.parse(ref_str)
     if ref.kind == "input":
-        if ref.port not in pipeline.inputs:
+        if ref.port not in inputs:
             msg = (
                 f"{context}: input {ref.port!r} is not declared in pipeline inputs"
-                f" (declared: {pipeline.inputs})"
+                f" (declared: {inputs})"
             )
             raise ValueError(msg)
     elif ref.kind == "constant":
-        if ref.port not in pipeline.constants:
+        if ref.port not in constants:
             msg = (
                 f"{context}: constant {ref.port!r} is not declared"
-                f" in pipeline constants (declared: {sorted(pipeline.constants)})"
+                f" in pipeline constants (declared: {sorted(constants)})"
             )
             raise ValueError(msg)
     else:
