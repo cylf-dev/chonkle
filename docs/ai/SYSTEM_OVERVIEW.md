@@ -75,10 +75,11 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
 - **pipeline** (`pipeline.py`): parse, validate, and prepare pipelines for
   execution. Entry point: `prepare(source, direction, *, resolver=None)` →
   `PreparedPipeline`. Internally: `Pipeline.parse()` (structural validation,
-  wiring refs, topological sort via Kahn's algorithm), codec resolution via
-  `Resolver`, wiring validation against codec signatures, signature
-  validation. `_get_encode_only_inputs()` derives encode-only ports from
-  codec signatures (also used by executor). Key types: `Pipeline`,
+  wiring refs parsed into `WiringRef` at construction, topological sort via
+  Kahn's algorithm), codec resolution via `Resolver`, wiring validation
+  against codec signatures, signature validation. `StepSpec.inputs` and
+  `Pipeline.outputs` hold pre-parsed `WiringRef` objects (not raw strings).
+  Validation uses `Signature` attributes directly. Key types: `Pipeline`,
   `PreparedPipeline`, `StepSpec`, `WiringRef`
 - **codecs** (`codecs/`): codec wrapper package. `Codec` ABC defines the
   `call(direction, port_map)` and `signature()` interface. `ComponentCodec`
@@ -96,8 +97,11 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   accepts them as input (single-copy via `ctypes.memmove`).
   `detect_codec_type()` reads the wasm binary header to distinguish core
   (`01 00 00 00`) from component (`0d 00 01 00`).
+  `Signature` and `PortDescriptor` frozen dataclasses provide typed codec
+  signatures; `Signature.from_dict()` converts raw JSON at codec
+  instantiation. `Codec.signature()` returns `Signature`.
   Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `NativeCodec`,
-  `CoreWasmRef`, `PortMap`
+  `CoreWasmRef`, `PortMap`, `Signature`, `PortDescriptor`
 - **resolver** (`resolver.py`): codec resolution and local store. `Resolver`
   maps codec_ids to `Codec` instances via a resolution chain: explicit paths →
   per-codec overrides → local store and native (selected by preference) →

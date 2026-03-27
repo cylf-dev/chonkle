@@ -209,17 +209,11 @@ def prepare(
 
     step_by_name = {s.name: s for s in pipeline.steps}
 
-    # Phase 1: resolve all codec_ids to Codec instances.
     codecs: dict[str, Codec] = {}
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
         codecs[step_name] = resolver.resolve(step.codec_id)
 
-    # Phase 2: validate wiring references against codec signatures
-    # (step output port checks that were deferred from parse time).
-    _validate_wiring_against_signatures(pipeline, codecs)
-
-    # Phase 3: validate all signatures before any component is called.
     _validate_signatures(pipeline, step_by_name, codecs, direction)
 
     return PreparedPipeline(
@@ -379,38 +373,37 @@ def _topological_sort(steps: list[StepSpec]) -> list[str]:
     return order
 
 
-# ---------------------------------------------------------------------------
-# Signature validation (moved from executor.py)
-# ---------------------------------------------------------------------------
-
-
-def _validate_wiring_against_signatures(
+def _validate_signatures(
     pipeline: Pipeline,
+    step_by_name: dict[str, StepSpec],
     codecs: Mapping[str, Codec],
+    direction: Direction,
 ) -> None:
-    """Validate step output port references against codec signatures.
+    """Validate all step signatures before any component is called.
 
-    At parse time, only step existence is checked. This function validates
-    that wiring references to step output ports match actual output ports
-    declared in the codec's signature.
+    For each step in topological order, checks that wiring refs targeting
+    upstream step outputs name ports that exist in the signature, validates
+    input/output port types and direction constraints, and accumulates
+    output types for downstream type checking. After the per-step loop,
+    validates pipeline output wiring refs the same way.
+
+    Collects errors from every step and raises a single ValueError listing
+    all problems.
     """
-    sig_outputs: dict[str, set[str]] = {}
-    for step in pipeline.steps:
-        sig = codecs[step.name].signature()
-        sig_outputs[step.name] = set(sig.outputs.keys())
-
     errors: list[str] = []
-
-    for step in pipeline.steps:
-        for port_name, ref in step.inputs.items():
-            if ref.kind == "step":
-                available = sig_outputs.get(ref.source, set())
-                if ref.port not in available:
-                    errors.append(
-                        f"Step {step.name!r} input {port_name!r}: "
-                        f"step {ref.source!r} does not declare output port "
-                        f"{ref.port!r} (signature outputs: {sorted(available)})"
-                    )
+    sig_outputs: dict[str, set[str]] = {}
+    step_output_types: dict[str, dict[str, str]] = {}
+    for step_name in pipeline.execution_order:
+        step = step_by_name[step_name]
+        sig = codecs[step_name].signature()
+        sig_outputs[step_name] = set(sig.outputs.keys())
+        step_output_types[step_name] = sig.output_types()
+        try:
+            _validate_signature(
+                step, sig, direction, pipeline, step_output_types, sig_outputs
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
 
     for out_name, ref in pipeline.outputs.items():
         if ref.kind == "step":
@@ -423,33 +416,6 @@ def _validate_wiring_against_signatures(
                 )
 
     if errors:
-        raise ValueError(
-            "Wiring validation against signatures failed:\n" + "\n".join(errors)
-        )
-
-
-def _validate_signatures(
-    pipeline: Pipeline,
-    step_by_name: dict[str, StepSpec],
-    codecs: Mapping[str, Codec],
-    direction: Direction,
-) -> None:
-    """Validate all step signatures before any component is called.
-
-    Collects errors from every step and raises a single ValueError listing
-    all problems.
-    """
-    errors: list[str] = []
-    step_output_types: dict[str, dict[str, str]] = {}
-    for step_name in pipeline.execution_order:
-        step = step_by_name[step_name]
-        sig = codecs[step_name].signature()
-        step_output_types[step_name] = sig.output_types()
-        try:
-            _validate_signature(step, sig, direction, pipeline, step_output_types)
-        except ValueError as exc:
-            errors.append(str(exc))
-    if errors:
         raise ValueError("Pipeline signature validation failed:\n" + "\n".join(errors))
 
 
@@ -459,13 +425,16 @@ def _validate_signature(
     direction: str,
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
+    sig_outputs: dict[str, set[str]],
 ) -> None:
-    """Verify a step's port declarations against a codec signature.
+    """Verify a step's wiring and port declarations against codec signatures.
 
-    Each check is a subset check — the step need not use every port the codec
-    declares. Input validation is direction-aware: encode_only ports (from
-    the signature) are excluded from the valid input set when direction is
-    "decode".
+    Checks that wiring refs targeting upstream step outputs name ports that
+    exist in the upstream codec's signature, then validates input/output port
+    types and direction constraints. Each check is a subset check — the step
+    need not use every port the codec declares. Input validation is
+    direction-aware: encode_only ports are excluded from the valid input set
+    when direction is "decode".
 
     Args:
         step: Step whose declared inputs are being checked.
@@ -474,11 +443,23 @@ def _validate_signature(
         pipeline: The pipeline, used to resolve input and constant types.
         step_output_types: Accumulated output types from previously validated
             upstream steps.
+        sig_outputs: Accumulated output port names from previously validated
+            upstream steps, used to check wiring ref port existence.
 
     Raises:
         ValueError: Declared ports are not valid per the signature.
     """
     errors: list[str] = []
+
+    for port_name, ref in step.inputs.items():
+        if ref.kind == "step":
+            available = sig_outputs.get(ref.source, set())
+            if ref.port not in available:
+                errors.append(
+                    f"Step {step.name!r} input {port_name!r}: "
+                    f"step {ref.source!r} does not declare output port "
+                    f"{ref.port!r} (signature outputs: {sorted(available)})"
+                )
 
     sig_inputs = signature.inputs
     if sig_inputs:
@@ -515,11 +496,11 @@ def _validate_signature(
             )
         )
 
-    sig_outputs = signature.outputs
-    if sig_outputs:
+    output_ports = signature.outputs
+    if output_ports:
         errors.extend(
             f"output port {p!r} is missing required 'type' field"
-            for p, d in sig_outputs.items()
+            for p, d in output_ports.items()
             if not d.type
         )
 

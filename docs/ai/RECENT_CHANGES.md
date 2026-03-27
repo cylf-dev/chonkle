@@ -4,6 +4,26 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **Pipeline type safety refactoring**: four changes to `pipeline.py` and
+  `codecs/_base.py` eliminating stringly-typed patterns.
+  - `Pipeline` construction fixed: `_validate_pipeline` and `_check_ref` now
+    take individual fields instead of a `Pipeline` object, allowing validation
+    and topological sort to run before the frozen dataclass is constructed.
+  - `WiringRef` parsed at construction: `StepSpec.inputs` is now
+    `dict[str, WiringRef]` and `Pipeline.outputs` is `dict[str, WiringRef]`,
+    parsed in `Pipeline.parse()`. `WiringRef.__str__` provides round-trip
+    formatting. Downstream code uses `.kind`, `.source`, `.port` instead of
+    string splitting.
+  - `_validate_signature` split: extracted `_extract_output_types()` for output
+    port type checking. `_validate_signature` returns `None` (was returning
+    encode_only set). Consolidated encode_only derivation into `active_inputs`
+    passed to `_check_input_types`.
+  - `Signature` dataclass: added `Signature` and `PortDescriptor` frozen
+    dataclasses to `codecs/_base.py`. `Codec.signature()` returns `Signature`
+    instead of `dict[str, Any]`. All dict-based signature access replaced with
+    attribute access. `Signature.from_dict()` converts raw JSON at codec
+    instantiation. Helper methods: `encode_only_inputs()`, `output_types()`.
+
 - **Merged parse and prepare into single entry point**: `prepare()`,
   `PreparedPipeline`, and all validation functions moved from `executor.py`
   to `pipeline.py`. Callers now use `prepare(source, direction) → run()` instead

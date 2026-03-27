@@ -60,7 +60,8 @@ defining module directly (e.g. `from chonkle.pipeline import prepare`).
 - **codecs/** — Codec wrapper package. `__init__.py` is docstring-only;
   import from submodules directly. Submodules:
   - **codecs/_base.py** — `Codec` ABC with `call(direction, port_map)` and
-    `signature()`. `PortMap` type alias, `SIGNATURES_DIR`,
+    `signature()`. `Signature` and `PortDescriptor` frozen dataclasses for
+    typed codec signatures. `PortMap` type alias, `SIGNATURES_DIR`,
     `CODEC_TRANSFORM_IFACE`, `detect_codec_type()`.
   - **codecs/component.py** — `ComponentCodec`: wraps a Component Model
     component. Caches `Component.from_file()` at init time.
@@ -73,7 +74,7 @@ defining module directly (e.g. `from chonkle.pipeline import prepare`).
   - **codecs/native.py** — `NativeCodec`: wraps a numcodecs codec (lazy import,
     signature from bundled JSON, bytes and ndarray calling conventions).
   Key types: `Codec`, `ComponentCodec`, `CoreWasmCodec`, `NativeCodec`,
-  `CoreWasmRef`, `PortMap`, `OutputPortMap`.
+  `CoreWasmRef`, `PortMap`, `OutputPortMap`, `Signature`, `PortDescriptor`.
 - **resolver.py** — Codec resolution and local store. `Resolver` maps
   codec_ids to `Codec` instances via: explicit paths → per-codec overrides →
   local store and native (selected by preference) → pipeline sources
