@@ -167,7 +167,7 @@ class Pipeline:
 
         outputs = {k: WiringRef.parse(v) for k, v in raw_outputs.items()}
 
-        _validate_pipeline(steps, inputs, constants, outputs)
+        _validate_wiring(steps, inputs, constants, outputs)
         topo_order = _topological_sort(steps)
         steps = {name: steps[name] for name in topo_order}
 
@@ -234,7 +234,7 @@ def prepare(
     for step_name, step in pipeline.steps.items():
         codecs[step_name] = resolver.resolve(step.codec_id)
 
-    _validate_signatures(pipeline, codecs, direction)
+    _validate_codec_signatures(pipeline, codecs, direction)
 
     encode_only_inputs: dict[str, frozenset[str]] = {}
     output_ports: dict[str, tuple[str, ...]] = {}
@@ -252,7 +252,7 @@ def prepare(
     )
 
 
-def _validate_pipeline(
+def _validate_wiring(
     steps: dict[str, StepSpec],
     inputs: dict[str, InputDescriptor],
     constants: dict[str, ConstantDescriptor],
@@ -277,7 +277,7 @@ def _validate_pipeline(
 
     for step in steps.values():
         for port_name, ref in step.inputs.items():
-            _validate_ref(
+            _validate_wiring_ref(
                 inputs,
                 constants,
                 ref,
@@ -286,7 +286,7 @@ def _validate_pipeline(
             )
 
     for out_name, ref in outputs.items():
-        _validate_ref(
+        _validate_wiring_ref(
             inputs,
             constants,
             ref,
@@ -295,7 +295,7 @@ def _validate_pipeline(
         )
 
 
-def _validate_ref(
+def _validate_wiring_ref(
     inputs: dict[str, InputDescriptor],
     constants: dict[str, ConstantDescriptor],
     ref: WiringRef,
@@ -393,7 +393,17 @@ def _topological_sort(steps: dict[str, StepSpec]) -> list[str]:
     return order
 
 
-def _validate_signatures(
+@dataclass
+class _ValidationContext:
+    """Accumulated cross-step state for signature validation."""
+
+    pipeline: Pipeline
+    direction: Direction
+    sig_outputs: dict[str, set[str]]
+    step_output_types: dict[str, dict[str, str]]
+
+
+def _validate_codec_signatures(
     pipeline: Pipeline,
     codecs: Mapping[str, Codec],
     direction: Direction,
@@ -410,22 +420,24 @@ def _validate_signatures(
     all problems.
     """
     errors: list[str] = []
-    sig_outputs: dict[str, set[str]] = {}
-    step_output_types: dict[str, dict[str, str]] = {}
+    ctx = _ValidationContext(
+        pipeline=pipeline,
+        direction=direction,
+        sig_outputs={},
+        step_output_types={},
+    )
     for step_name, step in pipeline.steps.items():
         sig = codecs[step_name].signature()
-        sig_outputs[step_name] = set(sig.outputs.keys())
-        step_output_types[step_name] = sig.output_types()
+        ctx.sig_outputs[step_name] = set(sig.outputs.keys())
+        ctx.step_output_types[step_name] = sig.output_types()
         try:
-            _validate_signature(
-                step, sig, direction, pipeline, step_output_types, sig_outputs
-            )
+            _validate_step_signature(step, sig, ctx)
         except ValueError as exc:
             errors.append(str(exc))
 
     for out_name, ref in pipeline.outputs.items():
         if ref.kind == "step":
-            available = sig_outputs.get(ref.source, set())
+            available = ctx.sig_outputs.get(ref.source, set())
             if ref.port not in available:
                 errors.append(
                     f"Pipeline output {out_name!r}: "
@@ -437,13 +449,10 @@ def _validate_signatures(
         raise ValueError("Pipeline signature validation failed:\n" + "\n".join(errors))
 
 
-def _validate_signature(
+def _validate_step_signature(
     step: StepSpec,
     signature: Signature,
-    direction: str,
-    pipeline: Pipeline,
-    step_output_types: dict[str, dict[str, str]],
-    sig_outputs: dict[str, set[str]],
+    ctx: _ValidationContext,
 ) -> None:
     """Verify a step's wiring and port declarations against codec signatures.
 
@@ -457,12 +466,7 @@ def _validate_signature(
     Args:
         step: Step whose declared inputs are being checked.
         signature: The codec signature (from ``codec.signature()``).
-        direction: Runtime execution direction ("encode" or "decode").
-        pipeline: The pipeline, used to resolve input and constant types.
-        step_output_types: Accumulated output types from previously validated
-            upstream steps.
-        sig_outputs: Accumulated output port names from previously validated
-            upstream steps, used to check wiring ref port existence.
+        ctx: Accumulated cross-step validation state.
 
     Raises:
         ValueError: Declared ports are not valid per the signature.
@@ -471,7 +475,7 @@ def _validate_signature(
 
     for port_name, ref in step.inputs.items():
         if ref.kind == "step":
-            available = sig_outputs.get(ref.source, set())
+            available = ctx.sig_outputs.get(ref.source, set())
             if ref.port not in available:
                 errors.append(
                     f"Step {step.name!r} input {port_name!r}: "
@@ -489,7 +493,7 @@ def _validate_signature(
 
         encode_only_ports = signature.encode_only_inputs()
 
-        if direction == "decode":
+        if ctx.direction == "decode":
             valid_inputs = {
                 name for name, desc in sig_inputs.items() if not desc.encode_only
             }
@@ -500,19 +504,11 @@ def _validate_signature(
         unknown = active_inputs - valid_inputs
         if unknown:
             errors.append(
-                f"inputs {sorted(unknown)} are not valid signature {direction} inputs "
-                f"{sorted(valid_inputs)}"
+                f"inputs {sorted(unknown)} are not valid signature "
+                f"{ctx.direction} inputs {sorted(valid_inputs)}"
             )
 
-        errors.extend(
-            _check_input_types(
-                step,
-                sig_inputs,
-                active_inputs,
-                pipeline,
-                step_output_types,
-            )
-        )
+        errors.extend(_check_input_types(step, sig_inputs, active_inputs, ctx))
 
     output_ports = signature.outputs
     if output_ports:
@@ -532,8 +528,7 @@ def _check_input_types(
     step: StepSpec,
     sig_inputs: dict[str, PortDescriptor],
     active_inputs: set[str],
-    pipeline: Pipeline,
-    step_output_types: dict[str, dict[str, str]],
+    ctx: _ValidationContext,
 ) -> list[str]:
     """Return type-mismatch error strings for each active wired input.
 
@@ -549,13 +544,13 @@ def _check_input_types(
             continue
         ref = step.inputs[port_name]
         if ref.kind == "input":
-            desc = pipeline.inputs.get(ref.port)
+            desc = ctx.pipeline.inputs.get(ref.port)
             actual_type = desc.type if desc and desc.type else None
         elif ref.kind == "constant":
-            cdesc = pipeline.constants.get(ref.port)
+            cdesc = ctx.pipeline.constants.get(ref.port)
             actual_type = cdesc.type if cdesc and cdesc.type else None
         else:
-            actual_type = step_output_types.get(ref.source, {}).get(ref.port)
+            actual_type = ctx.step_output_types.get(ref.source, {}).get(ref.port)
         if actual_type is not None and actual_type != expected_type:
             errors.append(
                 f"input {port_name!r}: wiring {str(ref)!r} provides type"
