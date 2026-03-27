@@ -106,8 +106,8 @@ def _execute_forward(
             value_store[f"{step_name}.{port_name}"] = value
 
     return {
-        out_name: _materialize(value_store[ref_str])
-        for out_name, ref_str in pipeline.outputs.items()
+        out_name: _materialize(value_store[str(ref)])
+        for out_name, ref in pipeline.outputs.items()
     }
 
 
@@ -124,8 +124,8 @@ def _execute_inverted(
     for name, descriptor in pipeline.constants.items():
         value_store[f"constant.{name}"] = json.dumps(descriptor["value"]).encode()
 
-    for out_name, ref_str in pipeline.outputs.items():
-        value_store[ref_str] = inputs[out_name]
+    for out_name, ref in pipeline.outputs.items():
+        value_store[str(ref)] = inputs[out_name]
 
     for step_name in reversed(pipeline.execution_order):
         step = step_by_name[step_name]
@@ -142,7 +142,7 @@ def _execute_inverted(
         output_map = codec.call(direction, port_map)
         for port_name, value in output_map:
             if port_name in step.inputs and port_name not in encode_only:
-                value_store[step.inputs[port_name]] = value
+                value_store[str(step.inputs[port_name])] = value
 
     return {
         name: _materialize(value_store[f"input.{name}"])
@@ -166,10 +166,10 @@ def _forward_port_map(
     """
     is_core = isinstance(codec, CoreWasmCodec)
     port_map: OutputPortMap = []
-    for port_name, ref_str in step.inputs.items():
+    for port_name, ref in step.inputs.items():
         if direction == "decode" and port_name in encode_only_inputs:
             continue
-        value = value_store[ref_str]
+        value = value_store[str(ref)]
         if isinstance(value, CoreWasmRef) and not is_core:
             value = value.materialize()
         port_map.append((port_name, value))
@@ -201,13 +201,13 @@ def _inverted_port_map(
             if isinstance(val, CoreWasmRef) and not is_core:
                 val = val.materialize()
             port_map.append((port_name, val))
-    for port_name, ref_str in step.inputs.items():
-        if ref_str.startswith("constant.") and port_name not in encode_only_inputs:
-            port_map.append((port_name, value_store[ref_str]))
+    for port_name, ref in step.inputs.items():
+        if ref.kind == "constant" and port_name not in encode_only_inputs:
+            port_map.append((port_name, value_store[str(ref)]))
     if direction == "encode":
         for port_name in encode_only_inputs:
             if port_name in step.inputs:
-                port_map.append((port_name, value_store[step.inputs[port_name]]))
+                port_map.append((port_name, value_store[str(step.inputs[port_name])]))
     return port_map
 
 

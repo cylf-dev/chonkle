@@ -61,6 +61,10 @@ class WiringRef:
 
         return cls(kind=kind, source=source, port=port)
 
+    def __str__(self) -> str:
+        """Reconstruct the original dot-notation wiring reference string."""
+        return f"{self.source}.{self.port}"
+
 
 @dataclass
 class StepSpec:
@@ -68,7 +72,7 @@ class StepSpec:
 
     name: str  # unique DAG node identifier; used in wiring references
     codec_id: str  # logical codec identifier; may repeat across steps
-    inputs: dict[str, str]  # port_name -> wiring_ref string
+    inputs: dict[str, WiringRef]  # port_name -> parsed wiring reference
 
 
 @dataclass
@@ -79,7 +83,7 @@ class Pipeline:
     direction: Direction
     inputs: dict[str, dict[str, Any]]
     constants: dict[str, dict[str, Any]]
-    outputs: dict[str, str]  # pipeline_output_name -> wiring_ref string
+    outputs: dict[str, WiringRef]  # pipeline_output_name -> parsed wiring ref
     sources: dict[str, str]  # codec_id -> URI (advisory fetch hints)
     steps: list[StepSpec]
     execution_order: list[str]  # step names in topological order
@@ -124,7 +128,7 @@ class Pipeline:
             raise ValueError(msg)
         inputs = dict(data.get("inputs", {}))
         constants = dict(data.get("constants", {}))
-        outputs = dict(data.get("outputs", {}))
+        raw_outputs: dict[str, str] = dict(data.get("outputs", {}))
         sources = dict(data.get("sources", {}))
 
         steps: list[StepSpec] = []
@@ -132,9 +136,14 @@ class Pipeline:
             step = StepSpec(
                 name=step_name,
                 codec_id=step_data["codec_id"],
-                inputs=dict(step_data.get("inputs", {})),
+                inputs={
+                    k: WiringRef.parse(v)
+                    for k, v in step_data.get("inputs", {}).items()
+                },
             )
             steps.append(step)
+
+        outputs = {k: WiringRef.parse(v) for k, v in raw_outputs.items()}
 
         _validate_pipeline(steps, inputs, constants, outputs)
         execution_order = _topological_sort(steps)
@@ -225,7 +234,7 @@ def _validate_pipeline(
     steps: list[StepSpec],
     inputs: dict[str, dict[str, Any]],
     constants: dict[str, dict[str, Any]],
-    outputs: dict[str, str],
+    outputs: dict[str, WiringRef],
 ) -> None:
     """Validate step declarations and all wiring references.
 
@@ -253,33 +262,33 @@ def _validate_pipeline(
         seen.add(step.name)
 
     for step in steps:
-        for port_name, ref_str in step.inputs.items():
-            _check_ref(
+        for port_name, ref in step.inputs.items():
+            _validate_ref(
                 inputs,
                 constants,
-                ref_str,
+                ref,
                 f"step {step.name!r} input {port_name!r}",
                 step_names,
             )
 
-    for out_name, ref_str in outputs.items():
-        _check_ref(
+    for out_name, ref in outputs.items():
+        _validate_ref(
             inputs,
             constants,
-            ref_str,
+            ref,
             f"pipeline output {out_name!r}",
             step_names,
         )
 
 
-def _check_ref(
+def _validate_ref(
     inputs: dict[str, dict[str, Any]],
     constants: dict[str, dict[str, Any]],
-    ref_str: str,
+    ref: WiringRef,
     context: str,
     step_names: set[str],
 ) -> None:
-    """Validate a single wiring reference against pipeline declarations.
+    """Validate a single pre-parsed wiring reference against pipeline declarations.
 
     For ``input`` references, confirms the port is declared in
     *inputs*.  For ``constant`` references, confirms the name is
@@ -290,8 +299,7 @@ def _check_ref(
     Args:
         inputs: Pipeline-level input declarations.
         constants: Pipeline-level constant declarations.
-        ref_str: The raw wiring reference string (e.g.
-            ``"input.bytes"`` or ``"zstd_step.bytes"``).
+        ref: A pre-parsed WiringRef.
         context: A human-readable label for the reference site,
             used in error messages.
         step_names: The set of all step names defined in the pipeline.
@@ -299,7 +307,6 @@ def _check_ref(
     Raises:
         ValueError: If the reference is unresolvable.
     """
-    ref = WiringRef.parse(ref_str)
     if ref.kind == "input":
         if ref.port not in inputs:
             msg = (
@@ -346,8 +353,7 @@ def _topological_sort(steps: list[StepSpec]) -> list[str]:
 
     for step in steps:
         deps: set[str] = set()
-        for ref_str in step.inputs.values():
-            ref = WiringRef.parse(ref_str)
+        for ref in step.inputs.values():
             if ref.kind == "step":
                 deps.add(ref.source)
         for dep in deps:
@@ -405,8 +411,7 @@ def _validate_wiring_against_signatures(
     errors: list[str] = []
 
     for step in pipeline.steps:
-        for port_name, ref_str in step.inputs.items():
-            ref = WiringRef.parse(ref_str)
+        for port_name, ref in step.inputs.items():
             if ref.kind == "step":
                 available = sig_outputs.get(ref.source, set())
                 if ref.port not in available:
@@ -416,8 +421,7 @@ def _validate_wiring_against_signatures(
                         f"{ref.port!r} (signature outputs: {sorted(available)})"
                     )
 
-    for out_name, ref_str in pipeline.outputs.items():
-        ref = WiringRef.parse(ref_str)
+    for out_name, ref in pipeline.outputs.items():
         if ref.kind == "step":
             available = sig_outputs.get(ref.source, set())
             if ref.port not in available:
@@ -556,7 +560,7 @@ def _check_input_types(
 ) -> list[str]:
     """Return type-mismatch error strings for each active wired input."""
     errors: list[str] = []
-    for port_name, ref_str in step.inputs.items():
+    for port_name, ref in step.inputs.items():
         if direction == "decode" and port_name in encode_only_inputs:
             continue
         if port_name not in signature_inputs:
@@ -564,7 +568,6 @@ def _check_input_types(
         expected_type = signature_inputs[port_name].get("type")
         if expected_type is None:
             continue
-        ref = WiringRef.parse(ref_str)
         if ref.kind == "input":
             actual_type = (pipeline.inputs.get(ref.port) or {}).get("type")
         elif ref.kind == "constant":
@@ -573,7 +576,7 @@ def _check_input_types(
             actual_type = step_output_types.get(ref.source, {}).get(ref.port)
         if actual_type is not None and actual_type != expected_type:
             errors.append(
-                f"input {port_name!r}: wiring {ref_str!r} provides type"
+                f"input {port_name!r}: wiring {str(ref)!r} provides type"
                 f" {actual_type!r} but codec expects {expected_type!r}"
             )
     return errors

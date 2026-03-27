@@ -55,7 +55,10 @@ class TestParsePipeline:
     def test_linear_pipeline_step_fields(self, cog_decode_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
         step = pipeline.steps[0]  # zlib step
-        assert step.inputs == {"bytes": "input.bytes", "level": "constant.level"}
+        assert {k: str(v) for k, v in step.inputs.items()} == {
+            "bytes": "input.bytes",
+            "level": "constant.level",
+        }
 
     def test_dag_pipeline_from_fixture(self, page_split_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(page_split_pipeline_json)
@@ -263,7 +266,9 @@ class TestWiringValidation:
         data = self._base()
         data["outputs"] = {"bytes": "input.bytes"}
         pipeline = Pipeline.parse(data)
-        assert pipeline.outputs == {"bytes": "input.bytes"}
+        assert {k: str(v) for k, v in pipeline.outputs.items()} == {
+            "bytes": "input.bytes",
+        }
 
     def test_pipeline_output_constant_passthrough(self) -> None:
         """A pipeline output may reference a constant directly."""
@@ -271,7 +276,9 @@ class TestWiringValidation:
         data["constants"] = {"level": {"type": "int", "value": 3}}
         data["outputs"] = {"level": "constant.level"}
         pipeline = Pipeline.parse(data)
-        assert pipeline.outputs == {"level": "constant.level"}
+        assert {k: str(v) for k, v in pipeline.outputs.items()} == {
+            "level": "constant.level",
+        }
 
     def test_cycle_detection(self) -> None:
         data = self._base()
