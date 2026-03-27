@@ -13,7 +13,6 @@ from chonkle.pipeline import (
     Pipeline,
     PreparedPipeline,
     StepSpec,
-    _get_encode_only_inputs,
 )
 
 log = logging.getLogger(__name__)
@@ -96,7 +95,7 @@ def _execute_forward(
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
         codec = codecs[step_name]
-        encode_only = _get_encode_only_inputs(codec.signature())
+        encode_only = codec.signature().encode_only_inputs()
         port_map = _forward_port_map(step, value_store, direction, encode_only, codec)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
@@ -131,8 +130,8 @@ def _execute_inverted(
         step = step_by_name[step_name]
         codec = codecs[step_name]
         sig = codec.signature()
-        encode_only = _get_encode_only_inputs(sig)
-        output_ports = list(sig.get("outputs", {}).keys())
+        encode_only = sig.encode_only_inputs()
+        output_ports = list(sig.outputs.keys())
         port_map = _inverted_port_map(
             step_name, step, value_store, direction, output_ports, encode_only, codec
         )

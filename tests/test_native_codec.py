@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from chonkle.codecs._base import Codec, PortMap
+from chonkle.codecs._base import Codec, PortMap, Signature
 from chonkle.codecs.native import NativeCodec
 from chonkle.executor import run
 from chonkle.pipeline import Direction, Pipeline, PreparedPipeline
@@ -20,9 +20,9 @@ class TestNativeCodecInstantiation:
     def test_loads_signature_from_bundled_file(self) -> None:
         codec = NativeCodec("zlib")
         sig = codec.signature()
-        assert sig["codec_id"] == "zlib"
-        assert sig["data_format"] == "bytes"
-        assert "bytes" in sig["inputs"]
+        assert sig.codec_id == "zlib"
+        assert sig.data_format == "bytes"
+        assert "bytes" in sig.inputs
 
     def test_codec_type_is_native(self) -> None:
         codec = NativeCodec("zlib")
@@ -120,15 +120,20 @@ class TestNativeCodecNdarrayFormat:
 # -- Fake codec for mixed pipeline tests --
 
 
+_DEFAULT_SIG = Signature.from_dict(
+    {
+        "inputs": {"bytes": {"type": "bytes"}},
+        "outputs": {"bytes": {"type": "bytes"}},
+    }
+)
+
+
 class _FakeCodec(Codec):
     """Test double for wiring tests."""
 
-    def __init__(self, call_fn: Any = None, sig: dict | None = None) -> None:
+    def __init__(self, call_fn: Any = None, sig: Signature | None = None) -> None:
         self._call_fn = call_fn or (lambda d, pm: [("bytes", b"output")])
-        self._sig = sig or {
-            "inputs": {"bytes": {"type": "bytes"}},
-            "outputs": {"bytes": {"type": "bytes"}},
-        }
+        self._sig = sig or _DEFAULT_SIG
 
     @property
     def codec_type(self) -> str:
@@ -136,13 +141,13 @@ class _FakeCodec(Codec):
 
     @property
     def codec_id(self) -> str:
-        return self._sig.get("codec_id", "fake")
+        return self._sig.codec_id or "fake"
 
     @property
     def implementation(self) -> str:
-        return self._sig.get("implementation", "fake")
+        return self._sig.implementation or "fake"
 
-    def signature(self) -> dict[str, Any]:
+    def signature(self) -> Signature:
         return self._sig
 
     def call(self, direction: Direction, port_map: PortMap) -> PortMap:

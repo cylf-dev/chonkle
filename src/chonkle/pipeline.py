@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from chonkle.codecs._base import Codec
+    from chonkle.codecs._base import Codec, PortDescriptor, Signature
     from chonkle.resolver import Resolver
 
 Direction = Literal["encode", "decode"]
@@ -384,15 +384,6 @@ def _topological_sort(steps: list[StepSpec]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _get_encode_only_inputs(signature: dict[str, Any]) -> set[str]:
-    """Derive the set of encode-only input port names from a codec signature."""
-    return {
-        name
-        for name, desc in signature.get("inputs", {}).items()
-        if desc.get("encode_only", False)
-    }
-
-
 def _validate_wiring_against_signatures(
     pipeline: Pipeline,
     codecs: Mapping[str, Codec],
@@ -406,7 +397,7 @@ def _validate_wiring_against_signatures(
     sig_outputs: dict[str, set[str]] = {}
     for step in pipeline.steps:
         sig = codecs[step.name].signature()
-        sig_outputs[step.name] = set(sig.get("outputs", {}).keys())
+        sig_outputs[step.name] = set(sig.outputs.keys())
 
     errors: list[str] = []
 
@@ -437,18 +428,6 @@ def _validate_wiring_against_signatures(
         )
 
 
-def _extract_output_types(signature: dict[str, Any]) -> dict[str, str]:
-    """Extract output port types from a codec signature.
-
-    Returns:
-        Mapping of output port name to type string.
-    """
-    return {
-        port: desc.get("type", "")
-        for port, desc in signature.get("outputs", {}).items()
-    }
-
-
 def _validate_signatures(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
@@ -465,7 +444,7 @@ def _validate_signatures(
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
         sig = codecs[step_name].signature()
-        step_output_types[step_name] = _extract_output_types(sig)
+        step_output_types[step_name] = sig.output_types()
         try:
             _validate_signature(step, sig, direction, pipeline, step_output_types)
         except ValueError as exc:
@@ -476,7 +455,7 @@ def _validate_signatures(
 
 def _validate_signature(
     step: StepSpec,
-    signature: dict[str, Any],
+    signature: Signature,
     direction: str,
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
@@ -490,7 +469,7 @@ def _validate_signature(
 
     Args:
         step: Step whose declared inputs are being checked.
-        signature: The codec signature dict (from ``codec.signature()``).
+        signature: The codec signature (from ``codec.signature()``).
         direction: Runtime execution direction ("encode" or "decode").
         pipeline: The pipeline, used to resolve input and constant types.
         step_output_types: Accumulated output types from previously validated
@@ -501,24 +480,22 @@ def _validate_signature(
     """
     errors: list[str] = []
 
-    if "inputs" in signature:
-        signature_inputs: dict[str, Any] = signature["inputs"]
+    sig_inputs = signature.inputs
+    if sig_inputs:
         errors.extend(
             f"input port {p!r} is missing required 'type' field"
-            for p, d in signature_inputs.items()
-            if "type" not in d
+            for p, d in sig_inputs.items()
+            if not d.type
         )
 
-        encode_only_ports = _get_encode_only_inputs(signature)
+        encode_only_ports = signature.encode_only_inputs()
 
         if direction == "decode":
             valid_inputs = {
-                name
-                for name, desc in signature_inputs.items()
-                if not desc.get("encode_only", False)
+                name for name, desc in sig_inputs.items() if not desc.encode_only
             }
         else:
-            valid_inputs = set(signature_inputs.keys())
+            valid_inputs = set(sig_inputs.keys())
 
         active_inputs = set(step.inputs.keys()) - encode_only_ports
         unknown = active_inputs - valid_inputs
@@ -531,18 +508,19 @@ def _validate_signature(
         errors.extend(
             _check_input_types(
                 step,
-                signature_inputs,
+                sig_inputs,
                 active_inputs,
                 pipeline,
                 step_output_types,
             )
         )
 
-    if "outputs" in signature:
+    sig_outputs = signature.outputs
+    if sig_outputs:
         errors.extend(
             f"output port {p!r} is missing required 'type' field"
-            for p, d in signature["outputs"].items()
-            if "type" not in d
+            for p, d in sig_outputs.items()
+            if not d.type
         )
 
     if errors:
@@ -553,7 +531,7 @@ def _validate_signature(
 
 def _check_input_types(
     step: StepSpec,
-    signature_inputs: dict[str, Any],
+    sig_inputs: dict[str, PortDescriptor],
     active_inputs: set[str],
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
@@ -565,10 +543,10 @@ def _check_input_types(
     """
     errors: list[str] = []
     for port_name in active_inputs:
-        if port_name not in signature_inputs:
+        if port_name not in sig_inputs:
             continue
-        expected_type = signature_inputs[port_name].get("type")
-        if expected_type is None:
+        expected_type = sig_inputs[port_name].type
+        if not expected_type:
             continue
         ref = step.inputs[port_name]
         if ref.kind == "input":

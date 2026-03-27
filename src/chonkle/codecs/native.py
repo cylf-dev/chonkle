@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from chonkle.codecs._base import SIGNATURES_DIR, Codec, PortMap
+from chonkle.codecs._base import SIGNATURES_DIR, Codec, PortMap, Signature
 from chonkle.pipeline import Direction
 
 
@@ -44,11 +44,10 @@ class NativeCodec(Codec):
     """
 
     def __init__(self, codec_id: str) -> None:
-        self._sig = _load_native_signature(codec_id)
-        self._data_format: str = self._sig.get("data_format", "bytes")
+        raw_sig = _load_native_signature(codec_id)
+        self._sig = Signature.from_dict(raw_sig)
+        self._data_format: str = self._sig.data_format or "bytes"
         self._numcodecs = _import_numcodecs()
-        self._codec_id_str = self._sig.get("codec_id", codec_id)
-        self._impl = self._sig.get("implementation", f"numcodecs.{codec_id}")
 
     @property
     def codec_type(self) -> str:
@@ -56,13 +55,13 @@ class NativeCodec(Codec):
 
     @property
     def codec_id(self) -> str:
-        return self._codec_id_str
+        return self._sig.codec_id
 
     @property
     def implementation(self) -> str:
-        return self._impl
+        return self._sig.implementation
 
-    def signature(self) -> dict[str, Any]:
+    def signature(self) -> Signature:
         return self._sig
 
     def call(self, direction: Direction, port_map: PortMap) -> PortMap:
@@ -86,7 +85,7 @@ class NativeCodec(Codec):
 
     def _build_codec(self, kwargs: dict[str, Any], dtype_str: str | None) -> Any:
         """Instantiate the numcodecs codec, trying dtype as a constructor arg."""
-        config = {"id": self._codec_id_str, **kwargs}
+        config = {"id": self._sig.codec_id, **kwargs}
         if dtype_str is not None:
             try:
                 return self._numcodecs.get_codec({**config, "dtype": dtype_str})

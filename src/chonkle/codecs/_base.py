@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,64 @@ type PortMap = list[tuple[str, bytes]]
 _WASM_MAGIC = b"\x00asm"
 _CORE_WASM_VERSION = b"\x01\x00\x00\x00"
 _COMPONENT_VERSION = b"\x0d\x00\x01\x00"
+
+
+@dataclass(frozen=True)
+class PortDescriptor:
+    """Descriptor for a single input or output port in a codec signature."""
+
+    type: str
+    required: bool = True
+    default: Any = None
+    encode_only: bool = False
+
+
+@dataclass(frozen=True)
+class Signature:
+    """Structured codec signature.
+
+    Replaces the raw ``dict[str, Any]`` signature format with typed fields.
+    """
+
+    codec_id: str
+    implementation: str
+    inputs: dict[str, PortDescriptor] = field(default_factory=dict)
+    outputs: dict[str, PortDescriptor] = field(default_factory=dict)
+    data_format: str | None = None  # "bytes" or "ndarray", native codecs only
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Signature:
+        """Construct a Signature from a raw JSON-derived dict."""
+        inputs: dict[str, PortDescriptor] = {}
+        for name, desc in d.get("inputs", {}).items():
+            inputs[name] = PortDescriptor(
+                type=desc.get("type", ""),
+                required=desc.get("required", True),
+                default=desc.get("default"),
+                encode_only=desc.get("encode_only", False),
+            )
+        outputs: dict[str, PortDescriptor] = {}
+        for name, desc in d.get("outputs", {}).items():
+            outputs[name] = PortDescriptor(
+                type=desc.get("type", ""),
+                required=desc.get("required", True),
+                default=desc.get("default"),
+            )
+        return cls(
+            codec_id=d.get("codec_id", ""),
+            implementation=d.get("implementation", ""),
+            inputs=inputs,
+            outputs=outputs,
+            data_format=d.get("data_format"),
+        )
+
+    def encode_only_inputs(self) -> set[str]:
+        """Port names where encode_only is True."""
+        return {n for n, p in self.inputs.items() if p.encode_only}
+
+    def output_types(self) -> dict[str, str]:
+        """Map of output port name to type string."""
+        return {n: p.type for n, p in self.outputs.items()}
 
 
 class Codec(ABC):
@@ -47,7 +106,7 @@ class Codec(ABC):
         ...
 
     @abstractmethod
-    def signature(self) -> dict[str, Any]:
+    def signature(self) -> Signature:
         """Return the codec's signature (loaded at instantiation)."""
         ...
 

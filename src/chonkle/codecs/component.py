@@ -8,7 +8,7 @@ from typing import Any
 import wasmtime
 import wasmtime.component
 
-from chonkle.codecs._base import CODEC_TRANSFORM_IFACE, Codec, PortMap
+from chonkle.codecs._base import CODEC_TRANSFORM_IFACE, Codec, PortMap, Signature
 from chonkle.pipeline import Direction
 from chonkle.wasm_signature import read_signature
 
@@ -24,7 +24,7 @@ class ComponentCodec(Codec):
     def __init__(self, engine: wasmtime.Engine, wasm_path: Path) -> None:
         self._engine = engine
         self._wasm_path = wasm_path
-        self._sig = read_signature(wasm_path)
+        self._sig = Signature.from_dict(read_signature(wasm_path))
         self._component = wasmtime.component.Component.from_file(engine, str(wasm_path))
 
     @property
@@ -33,13 +33,13 @@ class ComponentCodec(Codec):
 
     @property
     def codec_id(self) -> str:
-        return self._sig.get("codec_id", "")
+        return self._sig.codec_id
 
     @property
     def implementation(self) -> str:
-        return self._sig.get("implementation", "")
+        return self._sig.implementation
 
-    def signature(self) -> dict[str, Any]:
+    def signature(self) -> Signature:
         return self._sig
 
     def call(self, direction: Direction, port_map: PortMap) -> PortMap:

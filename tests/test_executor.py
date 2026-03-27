@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from chonkle.codecs._base import Codec, PortMap
+from chonkle.codecs._base import Codec, PortMap, Signature
 from chonkle.codecs.core import CoreWasmCodec, CoreWasmRef
 from chonkle.executor import run
 from chonkle.pipeline import Direction, Pipeline, PreparedPipeline, prepare
@@ -28,19 +28,24 @@ def _wasm_with_signature(signature: dict) -> bytes:
 # ---------- Fake codec for wiring tests ----------
 
 
+_DEFAULT_SIG = Signature.from_dict(
+    {
+        "inputs": {"bytes": {"type": "bytes"}},
+        "outputs": {"bytes": {"type": "bytes"}},
+    }
+)
+
+
 class _FakeCodec(Codec):
     """Test double that records calls and returns canned outputs."""
 
     def __init__(
         self,
         call_fn: Any = None,
-        sig: dict | None = None,
+        sig: Signature | None = None,
     ) -> None:
         self._call_fn = call_fn or (lambda d, pm: [("bytes", b"output")])
-        self._sig = sig or {
-            "inputs": {"bytes": {"type": "bytes"}},
-            "outputs": {"bytes": {"type": "bytes"}},
-        }
+        self._sig = sig or _DEFAULT_SIG
 
     @property
     def codec_type(self) -> str:
@@ -48,13 +53,13 @@ class _FakeCodec(Codec):
 
     @property
     def codec_id(self) -> str:
-        return self._sig.get("codec_id", "fake")
+        return self._sig.codec_id or "fake"
 
     @property
     def implementation(self) -> str:
-        return self._sig.get("implementation", "fake")
+        return self._sig.implementation or "fake"
 
-    def signature(self) -> dict[str, Any]:
+    def signature(self) -> Signature:
         return self._sig
 
     def call(self, direction: Direction, port_map: PortMap) -> PortMap:
@@ -140,13 +145,15 @@ def _make_decode_pipeline() -> dict:
 
 
 # Signature with level marked as encode_only.
-_SIG_WITH_ENCODE_ONLY = {
-    "inputs": {
-        "bytes": {"type": "bytes"},
-        "level": {"type": "int", "encode_only": True},
-    },
-    "outputs": {"bytes": {"type": "bytes"}},
-}
+_SIG_WITH_ENCODE_ONLY = Signature.from_dict(
+    {
+        "inputs": {
+            "bytes": {"type": "bytes"},
+            "level": {"type": "int", "encode_only": True},
+        },
+        "outputs": {"bytes": {"type": "bytes"}},
+    }
+)
 
 
 class TestRunWiring:
@@ -267,13 +274,15 @@ class TestRunWiring:
             received_pm.extend(port_map)
             return [("bytes", b"decoded")]
 
-        sig = {
-            "inputs": {
-                "bytes": {"type": "bytes"},
-                "sym_table": {"type": "string", "encode_only": True},
-            },
-            "outputs": {"bytes": {"type": "bytes"}},
-        }
+        sig = Signature.from_dict(
+            {
+                "inputs": {
+                    "bytes": {"type": "bytes"},
+                    "sym_table": {"type": "string", "encode_only": True},
+                },
+                "outputs": {"bytes": {"type": "bytes"}},
+            }
+        )
         codecs = {"s": _FakeCodec(call_fn=fake_call, sig=sig)}
         prepared = _prepared(pipeline, codecs=codecs)
         run(prepared, {"bytes": b"encoded"})
@@ -306,13 +315,15 @@ class TestRunWiring:
             received_pm.extend(port_map)
             return [("bytes", b"encoded")]
 
-        sig = {
-            "inputs": {
-                "bytes": {"type": "bytes"},
-                "sym_table": {"type": "string", "encode_only": True},
-            },
-            "outputs": {"bytes": {"type": "bytes"}},
-        }
+        sig = Signature.from_dict(
+            {
+                "inputs": {
+                    "bytes": {"type": "bytes"},
+                    "sym_table": {"type": "string", "encode_only": True},
+                },
+                "outputs": {"bytes": {"type": "bytes"}},
+            }
+        )
         codecs = {"s": _FakeCodec(call_fn=fake_call, sig=sig)}
         prepared = _prepared(pipeline, codecs=codecs)
         run(prepared, {"bytes": b"data"})
@@ -405,10 +416,12 @@ class TestRunWiring:
             mid = len(data_bytes) // 2
             return [("a", data_bytes[:mid]), ("b", data_bytes[mid:])]
 
-        split_sig = {
-            "inputs": {"bytes": {"type": "bytes"}},
-            "outputs": {"a": {"type": "bytes"}, "b": {"type": "bytes"}},
-        }
+        split_sig = Signature.from_dict(
+            {
+                "inputs": {"bytes": {"type": "bytes"}},
+                "outputs": {"a": {"type": "bytes"}, "b": {"type": "bytes"}},
+            }
+        )
         codecs = {
             "split": _FakeCodec(call_fn=fake_split, sig=split_sig),
             "proc_a": _FakeCodec(call_fn=lambda d, pm: pm),
@@ -1055,14 +1068,16 @@ class TestInvertedExecution:
             )
             return [("bytes", combined)]
 
-        split_sig = {
-            "inputs": {"bytes": {"type": "bytes"}},
-            "outputs": {
-                "rep_levels": {"type": "bytes"},
-                "def_levels": {"type": "bytes"},
-                "data": {"type": "bytes"},
-            },
-        }
+        split_sig = Signature.from_dict(
+            {
+                "inputs": {"bytes": {"type": "bytes"}},
+                "outputs": {
+                    "rep_levels": {"type": "bytes"},
+                    "def_levels": {"type": "bytes"},
+                    "data": {"type": "bytes"},
+                },
+            }
+        )
         codecs = {
             "page_split": _FakeCodec(call_fn=fake_split, sig=split_sig),
             "identity_rep": _FakeCodec(call_fn=lambda d, pm: pm),
@@ -1109,13 +1124,15 @@ class TestInvertedExecution:
             received_port_maps.append(list(port_map))
             return [("bytes", b"decoded")]
 
-        sig = {
-            "inputs": {
-                "bytes": {"type": "bytes"},
-                "level": {"type": "int", "encode_only": True},
-            },
-            "outputs": {"bytes": {"type": "bytes"}},
-        }
+        sig = Signature.from_dict(
+            {
+                "inputs": {
+                    "bytes": {"type": "bytes"},
+                    "level": {"type": "int", "encode_only": True},
+                },
+                "outputs": {"bytes": {"type": "bytes"}},
+            }
+        )
         codecs = {"s": _FakeCodec(call_fn=fake_call, sig=sig)}
         prepared = _prepared(pipeline, direction="decode", codecs=codecs)
         run(prepared, {"bytes": b"encoded"})
