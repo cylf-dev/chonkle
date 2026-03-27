@@ -437,6 +437,18 @@ def _validate_wiring_against_signatures(
         )
 
 
+def _extract_output_types(signature: dict[str, Any]) -> dict[str, str]:
+    """Extract output port types from a codec signature.
+
+    Returns:
+        Mapping of output port name to type string.
+    """
+    return {
+        port: desc.get("type", "")
+        for port, desc in signature.get("outputs", {}).items()
+    }
+
+
 def _validate_signatures(
     pipeline: Pipeline,
     step_by_name: dict[str, StepSpec],
@@ -452,12 +464,10 @@ def _validate_signatures(
     step_output_types: dict[str, dict[str, str]] = {}
     for step_name in pipeline.execution_order:
         step = step_by_name[step_name]
-        codec = codecs[step_name]
+        sig = codecs[step_name].signature()
+        step_output_types[step_name] = _extract_output_types(sig)
         try:
-            output_types = _validate_signature(
-                step, codec.signature(), direction, pipeline, step_output_types
-            )
-            step_output_types[step_name] = output_types or {}
+            _validate_signature(step, sig, direction, pipeline, step_output_types)
         except ValueError as exc:
             errors.append(str(exc))
     if errors:
@@ -470,7 +480,7 @@ def _validate_signature(
     direction: str,
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
-) -> dict[str, str]:
+) -> None:
     """Verify a step's port declarations against a codec signature.
 
     Each check is a subset check — the step need not use every port the codec
@@ -485,9 +495,6 @@ def _validate_signature(
         pipeline: The pipeline, used to resolve input and constant types.
         step_output_types: Accumulated output types from previously validated
             upstream steps.
-
-    Returns:
-        Mapping of output port name to type string, from the signature.
 
     Raises:
         ValueError: Declared ports are not valid per the signature.
@@ -525,10 +532,9 @@ def _validate_signature(
             _check_input_types(
                 step,
                 signature_inputs,
-                direction,
+                active_inputs,
                 pipeline,
                 step_output_types,
-                encode_only_ports,
             )
         )
 
@@ -544,30 +550,27 @@ def _validate_signature(
         msg = f"Step {step.name!r}: {joined}"
         raise ValueError(msg)
 
-    return {
-        port: desc.get("type", "")
-        for port, desc in signature.get("outputs", {}).items()
-    }
-
 
 def _check_input_types(
     step: StepSpec,
     signature_inputs: dict[str, Any],
-    direction: str,
+    active_inputs: set[str],
     pipeline: Pipeline,
     step_output_types: dict[str, dict[str, str]],
-    encode_only_inputs: set[str],
 ) -> list[str]:
-    """Return type-mismatch error strings for each active wired input."""
+    """Return type-mismatch error strings for each active wired input.
+
+    Only checks ports in *active_inputs* (step inputs minus encode_only
+    when decoding), avoiding redundant direction/encode_only filtering.
+    """
     errors: list[str] = []
-    for port_name, ref in step.inputs.items():
-        if direction == "decode" and port_name in encode_only_inputs:
-            continue
+    for port_name in active_inputs:
         if port_name not in signature_inputs:
             continue
         expected_type = signature_inputs[port_name].get("type")
         if expected_type is None:
             continue
+        ref = step.inputs[port_name]
         if ref.kind == "input":
             actual_type = (pipeline.inputs.get(ref.port) or {}).get("type")
         elif ref.kind == "constant":
