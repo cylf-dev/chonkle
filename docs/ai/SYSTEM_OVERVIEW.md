@@ -79,8 +79,13 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   Kahn's algorithm), codec resolution via `Resolver`, wiring validation
   against codec signatures, signature validation. `StepSpec.inputs` and
   `Pipeline.outputs` hold pre-parsed `WiringRef` objects (not raw strings).
+  `Pipeline.steps` is a `dict[str, StepSpec]` with keys in topological
+  execution order (no separate `execution_order` field).
+  `PreparedPipeline` precomputes `encode_only_inputs` and `output_ports`
+  per step, eliminating `codec.signature()` calls from the executor.
   Validation uses `Signature` attributes directly. Key types: `Pipeline`,
-  `PreparedPipeline`, `StepSpec`, `WiringRef`
+  `PreparedPipeline`, `StepSpec`, `WiringRef`, `InputDescriptor`,
+  `ConstantDescriptor`
 - **codecs** (`codecs/`): codec wrapper package. `Codec` ABC defines the
   `call(direction, port_map)` and `signature()` interface. `ComponentCodec`
   wraps a Wasmtime Component Model component (instantiation, WIT function
@@ -111,9 +116,11 @@ Pipeline DAG design where each execution is driven by a pipeline JSON file:
   signatures. `list_codecs()` includes both wasm and native entries.
   `CodecEntry` holds store metadata. Key types: `Resolver`, `CodecEntry`.
 - **executor** (`executor.py`): execute a prepared pipeline. Entry point:
-  `run(prepared, inputs)` → outputs. `_execute_forward()` /
-  `_execute_inverted()` (split by direction, both use
-  `value_store: dict[str, bytes | CoreWasmRef]`), `_forward_port_map()` /
+  `run(prepared, inputs)` → outputs. `_execute_forward(prepared, inputs)` /
+  `_execute_inverted(prepared, inputs)` (split by direction, both use
+  `value_store: dict[str, bytes | CoreWasmRef]`; encode-only sets and
+  output ports come from precomputed `PreparedPipeline` fields, not
+  `codec.signature()` calls). `_forward_port_map()` /
   `_inverted_port_map()` (build port-maps from value_store, materializing
   `CoreWasmRef` for non-core codecs, passing through for core codecs).
   `_materialize()` resolves deferred refs to bytes for final outputs

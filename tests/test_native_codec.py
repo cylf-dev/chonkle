@@ -154,6 +154,27 @@ class _FakeCodec(Codec):
         return self._call_fn(direction, port_map)
 
 
+def _make_prepared(
+    pipeline: Pipeline,
+    direction: Direction,
+    codecs: dict[str, Codec],
+) -> PreparedPipeline:
+    """Build a PreparedPipeline computing encode_only_inputs and output_ports."""
+    return PreparedPipeline(
+        pipeline=pipeline,
+        direction=direction,
+        codecs=codecs,
+        encode_only_inputs={
+            name: frozenset(codecs[name].signature().encode_only_inputs())
+            for name in pipeline.steps
+        },
+        output_ports={
+            name: tuple(codecs[name].signature().outputs.keys())
+            for name in pipeline.steps
+        },
+    )
+
+
 class TestNativePipeline:
     """Test native codecs running in a DAG pipeline via the executor."""
 
@@ -174,23 +195,15 @@ class TestNativePipeline:
         }
         pipeline = Pipeline.parse(pipeline_dict)
         codec = NativeCodec("zlib")
-        prepared = PreparedPipeline(
-            pipeline=pipeline,
-            direction="encode",
-            codecs={"compress": codec},
-            step_by_name={s.name: s for s in pipeline.steps},
-        )
+        prepared = _make_prepared(pipeline, "encode", {"compress": codec})
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
         assert result["bytes"] != data
 
         # Decode direction
         pipeline_dec = Pipeline.parse({**pipeline_dict, "direction": "decode"})
-        prepared_dec = PreparedPipeline(
-            pipeline=pipeline_dec,
-            direction="decode",
-            codecs={"compress": NativeCodec("zlib")},
-            step_by_name={s.name: s for s in pipeline_dec.steps},
+        prepared_dec = _make_prepared(
+            pipeline_dec, "decode", {"compress": NativeCodec("zlib")}
         )
         decoded = run(prepared_dec, {"bytes": result["bytes"]})
         assert decoded["bytes"] == data
@@ -215,14 +228,10 @@ class TestNativePipeline:
             },
         }
         pipeline = Pipeline.parse(pipeline_dict)
-        prepared = PreparedPipeline(
-            pipeline=pipeline,
-            direction="encode",
-            codecs={
-                "step_a": NativeCodec("gzip"),
-                "step_b": NativeCodec("bz2"),
-            },
-            step_by_name={s.name: s for s in pipeline.steps},
+        prepared = _make_prepared(
+            pipeline,
+            "encode",
+            {"step_a": NativeCodec("gzip"), "step_b": NativeCodec("bz2")},
         )
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
@@ -248,12 +257,7 @@ class TestNativePipeline:
         }
         pipeline = Pipeline.parse(pipeline_dict)
         codec = NativeCodec("zlib")
-        prepared = PreparedPipeline(
-            pipeline=pipeline,
-            direction="encode",
-            codecs={"compress": codec},
-            step_by_name={s.name: s for s in pipeline.steps},
-        )
+        prepared = _make_prepared(pipeline, "encode", {"compress": codec})
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
         assert result["bytes"] != data
@@ -278,15 +282,11 @@ class TestNativePipeline:
             },
         }
         pipeline = Pipeline.parse(pipeline_dict)
-        prepared = PreparedPipeline(
-            pipeline=pipeline,
-            direction="encode",
-            codecs={
-                "step_a": NativeCodec("zlib"),
-                "step_b": _FakeCodec(call_fn=lambda d, pm: pm),
-            },
-            step_by_name={s.name: s for s in pipeline.steps},
-        )
+        codecs: dict[str, Codec] = {
+            "step_a": NativeCodec("zlib"),
+            "step_b": _FakeCodec(call_fn=lambda d, pm: pm),
+        }
+        prepared = _make_prepared(pipeline, "encode", codecs)
         data = bytes(range(256)) * 64
         result = run(prepared, {"bytes": data})
         # step_b is identity (returns input), so output is zlib-compressed
@@ -317,12 +317,7 @@ class TestNativePipeline:
         encoded = encode_codec.call("encode", [("bytes", data)])
 
         pipeline = Pipeline.parse(pipeline_dict)
-        prepared = PreparedPipeline(
-            pipeline=pipeline,
-            direction="decode",
-            codecs={"compress": NativeCodec("zlib")},
-            step_by_name={s.name: s for s in pipeline.steps},
-        )
+        prepared = _make_prepared(pipeline, "decode", {"compress": NativeCodec("zlib")})
         result = run(prepared, {"bytes": encoded[0][1]})
         assert result["bytes"] == data
 

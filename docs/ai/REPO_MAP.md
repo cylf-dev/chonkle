@@ -54,9 +54,12 @@ defining module directly (e.g. `from chonkle.pipeline import prepare`).
 - **pipeline.py** — DAG pipeline parsing, validation, and preparation. Entry
   point: `prepare(source, direction, *, resolver=None)` → `PreparedPipeline`.
   Parses pipeline JSON into a `Pipeline` dataclass, validates wiring
-  references, topologically sorts steps, resolves codec_ids via `Resolver`,
-  validates wiring against codec signatures, and validates all step signatures.
-  Key types: `Pipeline`, `PreparedPipeline`, `StepSpec`, `WiringRef`.
+  references, topologically sorts steps (stored as `dict[str, StepSpec]` in
+  topo order), resolves codec_ids via `Resolver`, validates wiring against
+  codec signatures, and validates all step signatures. `PreparedPipeline`
+  precomputes `encode_only_inputs` and `output_ports` per step.
+  Key types: `Pipeline`, `PreparedPipeline`, `StepSpec`, `WiringRef`,
+  `InputDescriptor`, `ConstantDescriptor`.
 - **codecs/** — Codec wrapper package. `__init__.py` is docstring-only;
   import from submodules directly. Submodules:
   - **codecs/_base.py** — `Codec` ABC with `call(direction, port_map)` and
@@ -85,11 +88,12 @@ defining module directly (e.g. `from chonkle.pipeline import prepare`).
   Key types: `Resolver`, `CodecEntry`.
 - **executor.py** — DAG execution via `Codec` wrappers. Entry point:
   `run(prepared, inputs)` → output dict. Executes the DAG via
-  `_execute_forward` / `_execute_inverted`. `value_store` holds
-  `bytes | CoreWasmRef`; port-map builders materialize refs for non-core
-  codecs, pass through for core codecs. `_materialize()` resolves final
-  outputs. Key internals: `value_store`, `_forward_port_map`,
-  `_inverted_port_map`, `_materialize`.
+  `_execute_forward(prepared, inputs)` / `_execute_inverted(prepared, inputs)`.
+  `value_store` holds `bytes | CoreWasmRef`; port-map builders materialize
+  refs for non-core codecs, pass through for core codecs. Encode-only sets
+  and output ports come from precomputed `PreparedPipeline` fields.
+  `_materialize()` resolves final outputs. Key internals: `value_store`,
+  `_forward_port_map`, `_inverted_port_map`, `_materialize`.
 - **wasm_download.py** — codec URI resolution and fetch cache. `resolve_uri()`
   handles `file://`, `https://`, and `oci://`. Downloads only the `.wasm` file
   (signatures are embedded). `download_https()` and `download_oci()` store

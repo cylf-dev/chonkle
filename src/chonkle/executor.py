@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
 
-from chonkle.codecs._base import Codec
 from chonkle.codecs.core import CoreWasmCodec, CoreWasmRef, OutputPortMap
 from chonkle.pipeline import (
-    Direction,
-    Pipeline,
     PreparedPipeline,
     StepSpec,
 )
@@ -58,27 +54,22 @@ def run(
                 msg = f"Missing pipeline input: {name!r}"
                 raise ValueError(msg)
 
-    step_by_name = prepared.step_by_name
-
     if inverted:
-        return _execute_inverted(
-            pipeline, step_by_name, prepared.codecs, inputs, direction
-        )
-    return _execute_forward(pipeline, step_by_name, prepared.codecs, inputs, direction)
+        return _execute_inverted(prepared, inputs)
+    return _execute_forward(prepared, inputs)
 
 
 def _execute_forward(
-    pipeline: Pipeline,
-    step_by_name: Mapping[str, StepSpec],
-    codecs: Mapping[str, Codec],
+    prepared: PreparedPipeline,
     inputs: dict[str, bytes],
-    direction: Direction,
 ) -> dict[str, bytes]:
     """Execute steps in topological order, calling the direction function.
 
     Seeds value_store with constants and pipeline inputs (omitting encode_only
     inputs when direction is ``"decode"``).
     """
+    pipeline = prepared.pipeline
+    direction = prepared.direction
     value_store: dict[str, bytes | CoreWasmRef] = {}
 
     for name, descriptor in pipeline.constants.items():
@@ -92,10 +83,9 @@ def _execute_forward(
     for name in active_inputs:
         value_store[f"input.{name}"] = inputs[name]
 
-    for step_name in pipeline.execution_order:
-        step = step_by_name[step_name]
-        codec = codecs[step_name]
-        encode_only = codec.signature().encode_only_inputs()
+    for step_name, step in pipeline.steps.items():
+        codec = prepared.codecs[step_name]
+        encode_only = prepared.encode_only_inputs[step_name]
         port_map = _forward_port_map(step, value_store, direction, encode_only, codec)
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
@@ -111,13 +101,12 @@ def _execute_forward(
 
 
 def _execute_inverted(
-    pipeline: Pipeline,
-    step_by_name: Mapping[str, StepSpec],
-    codecs: Mapping[str, Codec],
+    prepared: PreparedPipeline,
     inputs: dict[str, bytes],
-    direction: Direction,
 ) -> dict[str, bytes]:
     """Execute steps in reversed topological order, routing results backward."""
+    pipeline = prepared.pipeline
+    direction = prepared.direction
     value_store: dict[str, bytes | CoreWasmRef] = {}
 
     for name, descriptor in pipeline.constants.items():
@@ -126,12 +115,10 @@ def _execute_inverted(
     for out_name, ref in pipeline.outputs.items():
         value_store[str(ref)] = inputs[out_name]
 
-    for step_name in reversed(pipeline.execution_order):
-        step = step_by_name[step_name]
-        codec = codecs[step_name]
-        sig = codec.signature()
-        encode_only = sig.encode_only_inputs()
-        output_ports = list(sig.outputs.keys())
+    for step_name, step in reversed(pipeline.steps.items()):
+        codec = prepared.codecs[step_name]
+        encode_only = prepared.encode_only_inputs[step_name]
+        output_ports = prepared.output_ports[step_name]
         port_map = _inverted_port_map(
             step_name, step, value_store, direction, output_ports, encode_only, codec
         )
@@ -153,9 +140,9 @@ def _execute_inverted(
 def _forward_port_map(
     step: StepSpec,
     value_store: dict[str, bytes | CoreWasmRef],
-    direction: Direction,
-    encode_only_inputs: set[str],
-    codec: Codec,
+    direction: str,
+    encode_only_inputs: frozenset[str],
+    codec: object,
 ) -> OutputPortMap:
     """Build the port-map for a step in forward execution.
 
@@ -179,10 +166,10 @@ def _inverted_port_map(
     step_name: str,
     step: StepSpec,
     value_store: dict[str, bytes | CoreWasmRef],
-    direction: Direction,
-    output_ports: list[str],
-    encode_only_inputs: set[str],
-    codec: Codec,
+    direction: str,
+    output_ports: tuple[str, ...],
+    encode_only_inputs: frozenset[str],
+    codec: object,
 ) -> OutputPortMap:
     """Build the port-map for a step in inverted execution.
 

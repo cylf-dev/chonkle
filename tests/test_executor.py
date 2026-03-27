@@ -75,13 +75,20 @@ def _prepared(
     if direction is None:
         direction = pipeline.direction
     if codecs is None:
-        codecs = {s.name: _FakeCodec() for s in pipeline.steps}
-    step_by_name = {s.name: s for s in pipeline.steps}
+        codecs = {name: _FakeCodec() for name in pipeline.steps}
+    encode_only_inputs = {
+        name: frozenset(codecs[name].signature().encode_only_inputs())
+        for name in pipeline.steps
+    }
+    output_ports = {
+        name: tuple(codecs[name].signature().outputs.keys()) for name in pipeline.steps
+    }
     return PreparedPipeline(
         pipeline=pipeline,
         direction=direction,
         codecs=codecs,
-        step_by_name=step_by_name,
+        encode_only_inputs=encode_only_inputs,
+        output_ports=output_ports,
     )
 
 

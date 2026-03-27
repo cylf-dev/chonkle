@@ -44,9 +44,7 @@ class TestParsePipeline:
         assert pipeline.direction == "decode"
         assert list(pipeline.inputs.keys()) == ["bytes"]
         assert len(pipeline.steps) == 2
-        assert pipeline.steps[0].name == "zlib"
-        assert pipeline.steps[1].name == "predictor2"
-        assert pipeline.execution_order == ["zlib", "predictor2"]
+        assert list(pipeline.steps) == ["zlib", "predictor2"]
 
     def test_linear_pipeline_codec_id(self, cog_decode_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
@@ -54,7 +52,7 @@ class TestParsePipeline:
 
     def test_linear_pipeline_step_fields(self, cog_decode_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(cog_decode_pipeline_json)
-        step = pipeline.steps[0]  # zlib step
+        step = pipeline.steps["zlib"]
         assert {k: str(v) for k, v in step.inputs.items()} == {
             "bytes": "input.bytes",
             "level": "constant.level",
@@ -67,7 +65,9 @@ class TestParsePipeline:
 
     def test_dag_pipeline_shared_codec_id(self, page_split_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(page_split_pipeline_json)
-        identity_steps = [s for s in pipeline.steps if s.codec_id == "identity"]
+        identity_steps = [
+            s for s in pipeline.steps.values() if s.codec_id == "identity"
+        ]
         assert len(identity_steps) == 3
         assert {s.name for s in identity_steps} == {
             "identity_rep",
@@ -77,7 +77,7 @@ class TestParsePipeline:
 
     def test_dag_execution_order(self, page_split_pipeline_json: dict) -> None:
         pipeline = Pipeline.parse(page_split_pipeline_json)
-        order = pipeline.execution_order
+        order = list(pipeline.steps)
         page_split_idx = order.index("page_split")
         for name in ("identity_rep", "identity_def", "identity_data"):
             assert page_split_idx < order.index(name), f"page_split must precede {name}"
@@ -182,7 +182,7 @@ class TestWiringValidation:
         }
         data["outputs"] = {"bytes": "s.bytes"}
         pipeline = Pipeline.parse(data)
-        assert pipeline.execution_order == ["s"]
+        assert list(pipeline.steps) == ["s"]
 
     def test_valid_constant_ref(self) -> None:
         data = self._base()
@@ -209,7 +209,7 @@ class TestWiringValidation:
             },
         }
         pipeline = Pipeline.parse(data)
-        assert pipeline.execution_order.index("a") < pipeline.execution_order.index("b")
+        assert list(pipeline.steps).index("a") < list(pipeline.steps).index("b")
 
     def test_same_codec_id_different_names_valid(self) -> None:
         """The same codec may appear multiple times with distinct step names."""
@@ -225,8 +225,8 @@ class TestWiringValidation:
             },
         }
         pipeline = Pipeline.parse(data)
-        assert {s.name for s in pipeline.steps} == {"proc_a", "proc_b"}
-        assert all(s.codec_id == "identity" for s in pipeline.steps)
+        assert set(pipeline.steps) == {"proc_a", "proc_b"}
+        assert all(s.codec_id == "identity" for s in pipeline.steps.values())
 
     def test_undefined_input_raises(self) -> None:
         data = self._base()
@@ -320,7 +320,7 @@ class TestTopologicalOrder:
             },
         }
         pipeline = Pipeline.parse(data)
-        order = pipeline.execution_order
+        order = list(pipeline.steps)
         assert order.index("a") < order.index("b")
         assert order.index("b") < order.index("c")
 
@@ -347,7 +347,7 @@ class TestTopologicalOrder:
             },
         }
         pipeline = Pipeline.parse(data)
-        order = pipeline.execution_order
+        order = list(pipeline.steps)
         assert order.index("split") < order.index("proc_a")
         assert order.index("split") < order.index("proc_b")
 
@@ -370,4 +370,4 @@ class TestTopologicalOrder:
             },
         }
         pipeline = Pipeline.parse(data)
-        assert set(pipeline.execution_order) == {"step_a", "step_b"}
+        assert set(pipeline.steps) == {"step_a", "step_b"}

@@ -101,8 +101,7 @@ class Pipeline:
     constants: dict[str, ConstantDescriptor]
     outputs: dict[str, WiringRef]  # pipeline_output_name -> parsed wiring ref
     sources: dict[str, str]  # codec_id -> URI (advisory fetch hints)
-    steps: list[StepSpec]
-    execution_order: list[str]  # step names in topological order
+    steps: dict[str, StepSpec]  # keys in topological execution order
 
     @classmethod
     def parse(cls, source: Path | dict[str, Any]) -> Pipeline:
@@ -155,9 +154,9 @@ class Pipeline:
         raw_outputs: dict[str, str] = dict(data.get("outputs", {}))
         sources = dict(data.get("sources", {}))
 
-        steps: list[StepSpec] = []
+        steps: dict[str, StepSpec] = {}
         for step_name, step_data in data.get("steps", {}).items():
-            step = StepSpec(
+            steps[step_name] = StepSpec(
                 name=step_name,
                 codec_id=step_data["codec_id"],
                 inputs={
@@ -165,12 +164,12 @@ class Pipeline:
                     for k, v in step_data.get("inputs", {}).items()
                 },
             )
-            steps.append(step)
 
         outputs = {k: WiringRef.parse(v) for k, v in raw_outputs.items()}
 
         _validate_pipeline(steps, inputs, constants, outputs)
-        execution_order = _topological_sort(steps)
+        topo_order = _topological_sort(steps)
+        steps = {name: steps[name] for name in topo_order}
 
         return cls(
             codec_id=codec_id,
@@ -180,7 +179,6 @@ class Pipeline:
             outputs=outputs,
             sources=sources,
             steps=steps,
-            execution_order=execution_order,
         )
 
 
@@ -194,7 +192,8 @@ class PreparedPipeline:
     pipeline: Pipeline
     direction: Direction
     codecs: Mapping[str, Codec]
-    step_by_name: Mapping[str, StepSpec]
+    encode_only_inputs: Mapping[str, frozenset[str]]  # step_name -> encode_only ports
+    output_ports: Mapping[str, tuple[str, ...]]  # step_name -> output port names
 
 
 def prepare(
@@ -231,25 +230,30 @@ def prepare(
     if resolver is None:
         resolver = Resolver(pipeline_sources=pipeline.sources)
 
-    step_by_name = {s.name: s for s in pipeline.steps}
-
     codecs: dict[str, Codec] = {}
-    for step_name in pipeline.execution_order:
-        step = step_by_name[step_name]
+    for step_name, step in pipeline.steps.items():
         codecs[step_name] = resolver.resolve(step.codec_id)
 
-    _validate_signatures(pipeline, step_by_name, codecs, direction)
+    _validate_signatures(pipeline, codecs, direction)
+
+    encode_only_inputs: dict[str, frozenset[str]] = {}
+    output_ports: dict[str, tuple[str, ...]] = {}
+    for step_name, codec in codecs.items():
+        sig = codec.signature()
+        encode_only_inputs[step_name] = frozenset(sig.encode_only_inputs())
+        output_ports[step_name] = tuple(sig.outputs.keys())
 
     return PreparedPipeline(
         pipeline=pipeline,
         direction=direction,
         codecs=codecs,
-        step_by_name=step_by_name,
+        encode_only_inputs=encode_only_inputs,
+        output_ports=output_ports,
     )
 
 
 def _validate_pipeline(
-    steps: list[StepSpec],
+    steps: dict[str, StepSpec],
     inputs: dict[str, InputDescriptor],
     constants: dict[str, ConstantDescriptor],
     outputs: dict[str, WiringRef],
@@ -258,10 +262,9 @@ def _validate_pipeline(
 
     Performs the following checks in order:
 
-    1. Step names are unique within the pipeline.
-    2. Every step input wiring reference resolves to a declared
+    1. Every step input wiring reference resolves to a declared
        pipeline input, constant, or an existing step.
-    3. Every pipeline output wiring reference resolves in the
+    2. Every pipeline output wiring reference resolves in the
        same way.
 
     Step output port validation is deferred to ``prepare()`` time,
@@ -270,16 +273,9 @@ def _validate_pipeline(
     Raises:
         ValueError: If any of the above checks fail.
     """
-    step_names = {s.name for s in steps}
+    step_names = set(steps.keys())
 
-    seen: set[str] = set()
-    for step in steps:
-        if step.name in seen:
-            msg = f"Duplicate step name: {step.name!r}"
-            raise ValueError(msg)
-        seen.add(step.name)
-
-    for step in steps:
+    for step in steps.values():
         for port_name, ref in step.inputs.items():
             _validate_ref(
                 inputs,
@@ -345,7 +341,7 @@ def _validate_ref(
             raise ValueError(msg)
 
 
-def _topological_sort(steps: list[StepSpec]) -> list[str]:
+def _topological_sort(steps: dict[str, StepSpec]) -> list[str]:
     """Return step names in a valid execution order using Kahn's algorithm.
 
     Builds an in-degree map and adjacency list from the step wiring
@@ -353,8 +349,8 @@ def _topological_sort(steps: list[StepSpec]) -> list[str]:
     until all steps are ordered or a cycle is detected.
 
     Args:
-        steps: The list of StepSpec objects to sort.  Only
-            ``"step"``-kind wiring references (i.e. inter-step
+        steps: The dict of step name to StepSpec objects to sort.
+            Only ``"step"``-kind wiring references (i.e. inter-step
             dependencies) are considered; ``"input"`` and
             ``"constant"`` references do not contribute edges.
 
@@ -366,17 +362,17 @@ def _topological_sort(steps: list[StepSpec]) -> list[str]:
         ValueError: If the dependency graph contains a cycle,
             listing the step names involved.
     """
-    in_degree: dict[str, int] = {s.name: 0 for s in steps}
+    in_degree: dict[str, int] = dict.fromkeys(steps, 0)
     dependents: dict[str, list[str]] = defaultdict(list)
 
-    for step in steps:
+    for step_name, step in steps.items():
         deps: set[str] = set()
         for ref in step.inputs.values():
             if ref.kind == "step":
                 deps.add(ref.source)
         for dep in deps:
-            dependents[dep].append(step.name)
-            in_degree[step.name] += 1
+            dependents[dep].append(step_name)
+            in_degree[step_name] += 1
 
     queue: deque[str] = deque(name for name, deg in in_degree.items() if deg == 0)
     order: list[str] = []
@@ -399,7 +395,6 @@ def _topological_sort(steps: list[StepSpec]) -> list[str]:
 
 def _validate_signatures(
     pipeline: Pipeline,
-    step_by_name: dict[str, StepSpec],
     codecs: Mapping[str, Codec],
     direction: Direction,
 ) -> None:
@@ -417,8 +412,7 @@ def _validate_signatures(
     errors: list[str] = []
     sig_outputs: dict[str, set[str]] = {}
     step_output_types: dict[str, dict[str, str]] = {}
-    for step_name in pipeline.execution_order:
-        step = step_by_name[step_name]
+    for step_name, step in pipeline.steps.items():
         sig = codecs[step_name].signature()
         sig_outputs[step_name] = set(sig.outputs.keys())
         step_output_types[step_name] = sig.output_types()

@@ -4,6 +4,25 @@ Only architectural, structural, and workflow changes. Not bug fixes or minor twe
 
 ## March 2026
 
+- **Step dict and PreparedPipeline precomputation**: `Pipeline.steps` changed
+  from `list[StepSpec]` to `dict[str, StepSpec]` with keys in topological
+  execution order. `Pipeline.execution_order` removed — `list(pipeline.steps)`
+  gives the same order. `PreparedPipeline.step_by_name` removed (redundant
+  now that steps is a dict). `PreparedPipeline` gained two precomputed fields:
+  `encode_only_inputs: Mapping[str, frozenset[str]]` and
+  `output_ports: Mapping[str, tuple[str, ...]]`, eliminating all
+  `codec.signature()` calls from the executor. `_execute_forward` and
+  `_execute_inverted` now take `(prepared, inputs)` instead of 5 unpacked
+  parameters. Duplicate-name check removed from `_validate_pipeline` (dict
+  keys from JSON parsing are inherently unique).
+
+- **Typed pipeline descriptors**: `Pipeline.inputs` changed from
+  `dict[str, dict[str, Any]]` to `dict[str, InputDescriptor]` and
+  `Pipeline.constants` changed to `dict[str, ConstantDescriptor]`. Both
+  are frozen dataclasses in `pipeline.py`. All dict-based access
+  (`.get("encode_only", False)`, `["value"]`, `.get("type")`) replaced
+  with attribute access throughout `pipeline.py` and `executor.py`.
+
 - **Pipeline type safety refactoring**: four changes to `pipeline.py` and
   `codecs/_base.py` eliminating stringly-typed patterns.
   - `Pipeline` construction fixed: `_validate_pipeline` and `_check_ref` now
