@@ -25,38 +25,48 @@ dereference a host pointer. The host can read and write the module's linear
 memory but not the reverse. This isolation is why data copies at step boundaries
 are currently unavoidable.
 
-For any Wasm codec invocation, two copies occur regardless of host language:
+For a Component Model codec invocation, two copies occur at each step boundary
+regardless of host language — one to lower data into the component's linear
+memory, one to lift output back to the host:
 
 ```
      host bytes
          │
-      copy in   (lower: host → Wasm linear memory)
+      copy in   (lower: host → component linear memory)
          │
          ▼
-Wasm linear memory
+component linear memory
          │
     codec runs
          │
          ▼
-Wasm linear memory
+component linear memory
          │
-      copy out  (lift: Wasm linear memory → host)
+      copy out  (lift: component linear memory → host)
          │
          ▼
      host bytes
 ```
 
-The *cost* of those copies depends heavily on the host language and the Wasm
-interface style:
+Core Wasm codecs differ: the output stays in linear memory as a `CoreWasmRef`
+deferred reference. When the next step is also a Core Wasm codec, the executor
+does one `ctypes.memmove` between linear memories — one copy total for the
+edge, not two. When the next step is Native, the output is read out of linear memory into
+Python bytes — one copy. When the next step is Component Model, that read is
+followed by a second copy to lower the bytes into the component's linear memory
+via the canonical ABI.
 
-| Step A → Step B                               | Copies | Transfer mechanism          | Speed (Python host)  |
-|-----------------------------------------------|--------|-----------------------------|----------------------|
-| Native → Native                               | 0      | Python object reference     | —                    |
-| Native → Core module                          | 1      | `Memory.write()` (ctypes)   | ~10 GB/s             |
-| Core module → Native                          | 1      | `Memory.read()` (ctypes)    | ~10 GB/s             |
-| Core module → Core module (Python host)       | 2      | `Memory.read()` + `write()` | ~10 GB/s             |
-| Component → Component (Python host)           | 2      | Canonical ABI lift + lower  | 1.4–1.9 MB/s †       |
-| Component → Component (Rust/Go host)          | 2      | Single memcpy per direction | ~10 GB/s             |
+The number of copies per edge, and their cost, depend on both source and
+destination backend:
+
+| Step A → Step B                               | Copies | Transfer mechanism            | Speed (Python host)  |
+|-----------------------------------------------|--------|-------------------------------|----------------------|
+| Native → Native                               | 0      | Python object reference       | —                    |
+| Native → Core module                          | 1      | `Memory.write()` (ctypes)     | ~10 GB/s             |
+| Core module → Native                          | 1      | `Memory.read()` (ctypes)      | ~10 GB/s             |
+| Core module → Core module (Python host)       | 1      | `ctypes.memmove` (CoreWasmRef)| ~10 GB/s             |
+| Component → Component (Python host)           | 2      | Canonical ABI lift + lower    | 1.4–1.9 MB/s †       |
+| Component → Component (Rust/Go host)          | 2      | Single memcpy per direction   | ~10 GB/s             |
 
 † Measured on wasmtime-py 41 against the `identity` and `predictor2` codecs with
 1–2 MB buffers. The Python binding (`wasmtime._component._types.ListType`) iterates
@@ -66,7 +76,7 @@ direction. The Rust binding for the same WASM binary does a single `memory.write
 call (one memcpy). Measured throughput: 1.7 MB/s (Python raw bench) vs. 9,113 MB/s
 (Rust bench) at identical buffer sizes. This bottleneck is in the Python binding
 layer; it is not a property of the Component Model architecture. The correct fix is
-a native orchestrator.
+a Rust or Go orchestrator.
 
 ---
 
@@ -149,10 +159,10 @@ runtime (e.g., Wasmtime). The runtime's sandbox enforces memory isolation.
 
 **Pros**
 
-- **Uniform interface contract.** Every codec implements the same WIT interface.
-  The orchestrator uses one calling convention for all steps. Interface
-  verification is uniform: the runtime rejects mismatched components before any
-  data is processed, not as a silent runtime failure.
+- **Single orchestrator code path.** The orchestrator deals only with Wasm
+  codecs; there is no native dispatch branch to maintain in parallel. All
+  steps share the same artifact format, distribution infrastructure, and
+  signature-reading machinery.
 
 - **Portable artifacts.** The same `.wasm` binary runs on any OS and architecture
   that the runtime supports (Linux x86_64, macOS arm64, cloud serverless
@@ -164,9 +174,9 @@ runtime (e.g., Wasmtime). The runtime's sandbox enforces memory isolation.
   runtime explicitly grants via WASI. The trust model is consistent across all
   pipeline steps.
 
-- **Uniform distribution.** All codecs are `.wasm` artifacts. They use the same
-  registry, the same verification scheme (e.g., `.signature.json` sidecar), and
-  the same caching infrastructure.
+- **Uniform distribution.** All codecs are `.wasm` artifacts carrying embedded
+  `chonkle:signature` custom sections. They use the same registry and caching
+  infrastructure.
 
 - **Language-agnostic authoring.** Any language with a Wasm toolchain — Rust
   (`cargo-component`), C/C++ (`wit-bindgen-c`), Python (`componentize-py`), Go
@@ -182,16 +192,23 @@ runtime (e.g., Wasmtime). The runtime's sandbox enforces memory isolation.
 
 **Cons**
 
-- **2 copies per step boundary.** Wasm's sandbox requires data to cross the
-  host–codec boundary at each step edge. An N-step pipeline incurs 2N total
-  copies. (Static composition reduces this to 2, but only for fixed topologies.)
+- **At least 1 copy per step boundary.** Wasm's sandbox requires data to cross
+  the host–codec boundary at each step edge. Component Model codecs incur 2
+  copies per edge (lower + lift through the Canonical ABI). Core Wasm codecs
+  incur 1 copy per edge (a `memmove` between linear memories for adjacent Core
+  steps, or a single read-out for non-Core downstream codecs). Neither matches
+  the 0-copy path available when two native codecs share process memory.
+  (Static composition reduces Component Model pipeline cost to 2 total, but
+  only for fixed topologies.)
 
-- **Canonical ABI cost under Python orchestrators.** With wasmtime-py, each
-  copy direction through the Component Model Canonical ABI runs at 1.4–1.9 MB/s
-  for `list<u8>` data. A 2-step pipeline processing 2 MB tiles takes
-  approximately 4–5 s. A native (Rust/Go) orchestrator eliminates this: both
-  copy directions run at memcpy speed (~10 GB/s). The Wasm architecture is not
-  at fault; the bottleneck is the Python binding implementation.
+- **Canonical ABI overhead under Python orchestrators (Component Model only).**
+  With wasmtime-py, each copy direction through the Component Model Canonical
+  ABI runs at 1.4–1.9 MB/s for `list<u8>` data. A 2-step pipeline processing
+  2 MB tiles takes approximately 4–5 s. Core Wasm codecs do not use the
+  Canonical ABI; their copy path runs at `memmove` speed. A native (Rust/Go)
+  orchestrator eliminates the Canonical ABI overhead entirely: both copy
+  directions run at memcpy speed (~10 GB/s). The Wasm architecture is not at
+  fault; the bottleneck is the Python binding implementation.
 
 - **Limited hardware access.** GPU compute, architecture-specific SIMD beyond
   what the Wasm SIMD proposal covers, and OS-level I/O not exposed through WASI
@@ -221,15 +238,15 @@ runtime (e.g., Wasmtime). The runtime's sandbox enforces memory isolation.
 
 | Property                    | Mixed Native + Wasm                  | All-Wasm                              |
 |-----------------------------|--------------------------------------|---------------------------------------|
-| Interface uniformity        | No — dual calling convention         | Yes — one WIT contract                |
+| Interface uniformity        | No — dual calling convention         | ABI-dependent: WIT or binary port-map |
 | Security isolation          | Inconsistent (weakest codec wins)    | Uniform sandbox per codec             |
 | Portability                 | Limited by native codecs             | Platform-agnostic `.wasm` artifact    |
-| Step boundary copies        | 0 (native→native); 1 (native↔Wasm); 2 (Wasm→Wasm) | 2 per step edge        |
+| Step boundary copies        | 0–2; varies by step backend pair     | 1 (Core→Core); 2 (Component Model)    |
 | Static composition          | Not applicable                       | Available (Component Model, fixed topology) |
 | Distribution uniformity     | No — packages + `.wasm` files        | Yes — `.wasm` artifacts only          |
 | Migration barrier           | Low — existing codecs reusable       | Higher — requires Wasm toolchain      |
 | Hardware access             | Full (native steps)                  | Limited to WASI + host functions      |
-| Load-time verification      | Wasm steps only                      | All steps                             |
+| Load-time verification      | Wasm steps only                      | Component Model steps only            |
 | Debugging                   | Native steps: standard tools; Wasm steps: runtime-aware | Runtime-aware throughout |
 | Orchestrator code paths     | Multiple (by codec type)             | One                                   |
 
@@ -374,7 +391,7 @@ from the host — there is no `Memory.write()` path available.
   one `isinstance()` check and one ctypes field write per byte, plus Python
   loop overhead. At 2 MB, this is approximately 2 million Python iterations per
   copy direction. Measured throughput: ~1.7 MB/s. The Rust binding for the
-  same Wasm binary: ~9,100 MB/s. A native orchestrator eliminates this
+  same Wasm binary: ~9,100 MB/s. A Rust or Go orchestrator eliminates this
   discrepancy entirely; both directions run at memcpy speed.
 
 - **Linear memory hidden from host.** Unlike Core modules, there is no
@@ -457,9 +474,10 @@ multiple languages.
   treat components as first-class artifacts. Core modules require separate
   distribution infrastructure or must be treated as opaque blobs.
 
-- **Not a stable architectural target.** The hybrid state introduces complexity
-  that pays off only during a migration. It does not eliminate the underlying
-  trade-offs — it defers them.
+- **Increased orchestrator complexity without a clear resolution point.** The
+  dual calling convention adds code paths that cannot be unified. Unlike a
+  temporary migration, this complexity persists as long as both backend types
+  are in use.
 
 ---
 
@@ -512,60 +530,60 @@ is not the direction of new development.
 
 **Static composition and native orchestration have different cost profiles.**
 Static composition eliminates inter-step copies by merging the pipeline at build
-time. A native orchestrator eliminates the Python binding cost but keeps the 2N
+time. A Rust or Go orchestrator eliminates the Python binding cost but keeps the 2N
 copies. For large tiles in a many-step pipeline, static composition reduces
-memory traffic; a native orchestrator reduces per-copy overhead. Both improvements
+memory traffic; a Rust or Go orchestrator reduces per-copy overhead. Both improvements
 are independent and composable.
 
 ---
 
-## Part 4: Decision Guidance
+## Part 4: chonkle's Architecture and Rationale
 
-The following summarizes conditions under which each option is appropriate.
+chonkle currently supports all three options: Component Model components, Core
+Wasm modules, and native Python codecs can coexist in the same pipeline. This
+section describes the choices made in this proof-of-concept and the
+acknowledged costs.
 
-### Use mixed native + Wasm when
+### What was chosen and why
 
-- Legacy native codecs are in use and a full rewrite is not feasible.
-- A codec requires hardware access (GPU, specific SIMD, hardware crypto) that
-  is not expressible through WASI or host-function bindings.
-- The pipeline is in a defined transition period toward all-Wasm.
+**Native backend** — the Python numcodecs ecosystem provides a large catalog of
+existing codecs with hardware-accelerated implementations (SIMD, GPU, hardware
+crypto). Reimplementing them as Wasm would impose a high barrier to incremental
+adoption. Native edges also avoid copies entirely for native-to-native steps
+and have unrestricted hardware access.
 
-### Use all-Wasm when
+**Core Wasm backend** — under a Python orchestrator, `Memory.write()` and
+`Memory.read()` transfers run at ~10 GB/s. The Component Model Canonical ABI
+under wasmtime-py runs at ~1.7 MB/s for `list<u8>`. For data-intensive codecs
+in the current Python executor, Core ABI offers substantially better throughput.
+Core-to-core edges further reduce copies to one via `CoreWasmRef` deferred
+references and `ctypes.memmove`.
 
-- Uniform interface contract, consistent sandboxing, and portable artifacts
-  are required.
-- The pipeline is a long-term, maintained system where distribution, versioning,
-  and auditability of codecs matter.
-- The orchestrator is or will become a native-language host (Rust, Go), making
-  the Python canonical ABI cost irrelevant.
-- Static composition of a fixed pipeline topology is a performance goal.
+**Component Model backend** — provides load-time interface verification,
+automated code generation via `wit-bindgen`, and language-agnostic authoring.
+WIT defines the codec contract for Component Model codecs. When the throughput
+constraint is less critical or when the orchestrator is a compiled language,
+Component Model is worth considering for new codecs.
 
-### Use Core module ABI when
+### Backend consolidation
 
-- The host is Python and will remain Python, throughput matters, and the codec
-  interface is simple and stable.
-- Target environments include runtimes without Component Model support (browser,
-  IoT, wasm3).
-- The team can maintain the manual pointer/length convention across all codec
-  implementations and host language bindings.
+The current design does not commit to a single backend long-term. If the
+orchestrator moves to Rust, the Canonical ABI bottleneck disappears and both
+Wasm backends achieve memcpy throughput; at that point the backend distinction
+would become a toolchain and portability question rather than a performance one.
+How the three-backend design evolves from here is an open question.
 
-### Use Component Model when
+### Acknowledged costs
 
-- Interface richness, load-time verification, and automated marshalling are
-  required.
-- The orchestrator is or will be a native host (Rust, Go, C), where the
-  Canonical ABI cost is negligible.
-- Codecs are authored by multiple teams or in multiple languages.
-- Long-term ecosystem alignment (WASI P2, warg registry, static composition)
-  is a priority.
-
-### Use the hybrid (Core + Component Model) only when
-
-- A hard migration is in progress and a complete replacement is not yet possible.
-- Specific high-throughput Core ABI steps justify the added orchestrator
-  complexity for a Python host in a time-bounded context.
-- Plan to resolve the hybrid state over time. It is a migration state, not a
-  target architecture.
+- Three calling conventions in the orchestrator (`ComponentCodec`,
+  `CoreWasmCodec`, `NativeCodec`), each with its own code path.
+- No uniform interface contract: Core ABI and native codecs have no load-time
+  verification. Interface checking applies only to Component Model steps.
+- Inconsistent security boundary: native codecs run in the host process without
+  isolation; Core module linear memory is readable by the host; only Component
+  Model components have full isolation.
+- No static composition across the full pipeline. `wasm-tools compose` requires
+  all-Component-Model steps with a fixed topology.
 
 ---
 
