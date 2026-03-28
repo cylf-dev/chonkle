@@ -1,26 +1,28 @@
 # chonkle
 
-chonkle is a Python host for running data codec pipelines composed of WebAssembly components.
+chonkle is a Python host for running data codec pipelines. Pipelines are DAGs of codec steps backed by Component Model Wasm, Core Wasm, or native Python (numcodecs) implementations.
 
 ## Architecture
 
-- [CODEC_RUNTIME.md](CODEC_RUNTIME.md) — Why Wasm, why the Component Model, Python host limitations, and how the executor works
+- [CODEC_RUNTIME.md](CODEC_RUNTIME.md) — Codec backends, data transfer costs, Python host tradeoffs, and execution model
 
 ## Reference
 
 Specs for codec and pipeline authors.
 
-- [reference/CODEC_CONTRACT.md](reference/CODEC_CONTRACT.md) — WIT interface contract: what a codec component must implement
+- [reference/CODEC_CONTRACT.md](reference/CODEC_CONTRACT.md) — Codec contract: what each backend must implement (Component Model WIT, Core ABI, native)
+- [reference/CORE_ABI.md](reference/CORE_ABI.md) — Core ABI contract: port-map wire format, required exports, calling convention
 - [reference/PIPELINE_SCHEMA.md](reference/PIPELINE_SCHEMA.md) — Pipeline JSON schema: DAG structure, wiring references, step fields
 - [reference/protospec/](reference/protospec/) — Codec inventory: named codecs with typed signatures
+- [reference/comparisons/](reference/comparisons/) — Codec pipeline tradeoff analysis and F3 comparison
 
 ## Internals
 
 Details for maintaining or more thoroughly understanding chonkle.
 
-- [internals/CACHING.md](internals/CACHING.md) — Wasm download cache and wasmtime compiled-code cache
+- [internals/CACHING.md](internals/CACHING.md) — Local codec store, download cache, and wasmtime compilation cache
 - [internals/CANONICAL_ABI_PERF.md](internals/CANONICAL_ABI_PERF.md) — Performance investigation: where the time goes, Python vs. native host throughput, mitigations
-- [internals/DATA_COPIES.md](internals/DATA_COPIES.md) — Why data copies are unavoidable in the Wasm codec path, and approaches explored to reduce them
+- [internals/DATA_COPIES.md](internals/DATA_COPIES.md) — Copy counts per inter-step edge across all backend combinations, and approaches to reduce them
 - [internals/DISTRIBUTION.md](internals/DISTRIBUTION.md) — Options for distributing `.wasm` codec artifacts (GitHub Releases, GHCR/OCI, warg)
 
 ## Wasm background

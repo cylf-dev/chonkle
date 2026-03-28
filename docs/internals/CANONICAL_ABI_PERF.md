@@ -2,11 +2,9 @@
 
 ## Background
 
-The `TestCogChunkPipeline` tests take 4–9 seconds each. These are the
-only tests that run the full executor against real compiled codec components,
-so they are the only ones that exercise the canonical ABI with actual data. To
-find where the time is going, `time.perf_counter()` splits were added around
-each operation in `_call_component()`:
+Integration tests that run the full executor against real compiled Component Model
+codecs take 4–9 seconds each. To find where the time is going, `time.perf_counter()`
+splits were added around each operation in `ComponentCodec.call()`:
 
 ```
 from_file   store+linker   instantiate   fn      post_return   normalize
@@ -101,7 +99,7 @@ Python bytes ── step N output
 ```
 
 Each copy is charged at the rate for its own data size (input of step N for
-copy 1, output of step N for copy 2). For a 2-step COG pipeline (2 MB tiles),
+copy 1, output of step N for copy 2). For a 2-step Component Model codec pipeline with 2 MB tiles,
 total ABI traffic is ~7.5 MB across 4 copies, taking ~4–5 s.
 
 The result is **2 copies per step edge**. Both copies pass through Python's
@@ -109,23 +107,6 @@ heap. In a native host (Rust/Go), the same 2 copies occur but at C memcpy
 speed — the Python binding is the amplifier, not the architecture itself.
 
 For the full edge-type accounting, see [DATA_COPIES.md](DATA_COPIES.md).
-
-## History
-
-The pre-Component-Model `wasm_runner.py` used the **core module** (not the
-component) and accessed WASM memory directly:
-
-```python
-input_ptr = alloc_fn(store, input_len)
-memory.write(store, data, input_ptr)    # ctypes — fast
-result = codec_fn(store, input_ptr, input_len, config_ptr, config_len)
-output = memory.read(store, out_ptr, out_ptr + out_len)  # ctypes — fast
-```
-
-Core modules export `memory` as a plain wasmtime `Memory` object, so
-`Memory.write()` and `Memory.read()` — which are single C-level memcpy calls —
-are available. This was fast. The migration to the Component Model removed this
-path.
 
 ## Mitigation for the Python Orchestrator
 
@@ -179,14 +160,14 @@ per buffer, not per byte. PyO3 exposes `Engine`, `Component`, and `Store` as
 single C-level memcpy (~44 ns total PyO3 call overhead), not an O(N) Python
 operation.
 
-The executor's `_call_component()` replaces its wasmtime-py function call with
-the extension. No other executor logic changes. No codec changes.
+`ComponentCodec.call()` replaces its wasmtime-py function call with the extension.
+No other executor logic changes. No codec changes.
 
 #### Expected outcome
 
 All 2N copies that currently run at ~1.7 MB/s run at memcpy speed (~10 GB/s).
-For the 2-step COG pipeline at 2 MB tiles, per-step call time drops from ~2.5 s
-to the range shown in `bench/rust-host/` (~1 ms). The 4–9 s test times become
+For a 2-step Component Model codec pipeline at 2 MB tiles, per-step call time drops
+from ~2.5 s to the range shown in `bench/rust-host/` (~1 ms). The 4–9 s test times become
 sub-10 ms.
 
 #### Engineering cost

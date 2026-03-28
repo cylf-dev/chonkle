@@ -1,248 +1,205 @@
 # chonkle
 
-Chonkle is a codec pipeline executor for chunked array and columnar data
-formats (e.g., Zarr, COG, Parquet, ORC, Arrow). Built on the
-[WebAssembly Component Model](https://component-model.bytecodealliance.org/)
-and executed by a Python orchestrator backed by
-[Wasmtime](https://wasmtime.dev/).
+A Python host for Wasm codec pipelines, built for satellite imagery processing as part of the NASA-IMPACT VEDA ecosystem. Pipelines are directed acyclic graphs (DAGs) of codec steps defined in JSON. The orchestrator parses the DAG, validates wiring against codec signatures, and executes the pipeline via [Wasmtime](https://wasmtime.dev/).
 
-This realization of chonkle is the successor to an earlier proof of concept, which
-demonstrated that WebAssembly is a viable codec delivery mechanism for chunked array
-formats. That proof of concept mixed Python (numcodecs) and Wasm codecs in a simple
-linear pipeline. In this version, all codecs are Wasm components, pipelines are directed
-acyclic graphs (DAGs), and the interface contract is machine-verifiable.
+Status: proof of concept.
 
-## What chonkle established
+## Codec backends
 
-The original version of chonkle showed that:
+chonkle supports three codec backends. Each implements the same `Codec` ABC (`call(direction, port_map)` and `signature()`), so backends can be mixed freely within a single pipeline.
 
-- Wasm codecs can be fetched remotely, cached locally, and executed in a
-  sandboxed runtime
-- Codecs can be authored in multiple languages — Rust, C, and Python (via
-  componentize-py), among others — each compiled to Wasm by their respective
-  toolchains
-- Python and Wasm codecs can be freely mixed in a pipeline
+**Component Model Wasm** -- `.wasm` components implementing the `chonkle:codec/transform@0.1.0` WIT interface. Data transfer uses the canonical ABI (~1.7 MB/s measured throughput in the Python binding). Any language with a Component Model toolchain (Rust, C, Python via componentize-py) can implement the WIT interface. The Wasmtime sandbox isolates each component from the host.
 
-What the first version of chonkle did not address: pipelines where codec steps have
-multiple inputs or outputs (fan-in / fan-out), and the data copy overhead of moving
-chunk data between steps via Python.
+**Core Wasm** -- wasm32-wasi reactor modules using a binary port-map wire format via `Memory.read`/`Memory.write`. Data transfer throughput is ~10 GB/s. When consecutive pipeline steps are both core wasm, data transfers between their linear memories use `ctypes.memmove` (single-copy, no serialization round-trip). Core wasm modules export `memory`, `alloc`, `dealloc`, `encode`, and `decode`. The wire format is specified in `docs/reference/CORE_ABI.md`.
 
-## Why the Component Model
+**Native (numcodecs)** -- Python codecs from the [numcodecs](https://numcodecs.readthedocs.io/) library. No Wasm overhead. `numcodecs` and `numpy` are optional dependencies, imported lazily. Signatures are bundled as JSON files in `src/chonkle/signatures/numcodecs/`. Adding a new numcodecs codec requires only adding a signature file.
 
-A real-world codec pipeline is not a simple linear chain. Consider a Parquet
-column page: it must be decompressed, then split into three separate streams
-(repetition levels, definition levels, and values), each of which is then
-decoded independently. That is a 1-to-3 fan-out. Dictionary-encoded columns
-require two inputs to a single codec step — the encoded indices and a
-separately-stored dictionary page. That is a 2-to-1 fan-in.
+The `Resolver` selects among available implementations using a configurable backend preference list. The default preference order is `["native", "core", "component"]`.
 
-Modeling these pipelines correctly requires named, typed ports — not just `bytes in,
-bytes out`. The WebAssembly Component Model provides this through WIT (WebAssembly
-Interface Types): every codec component must export `encode` and `decode` functions that
-accept a named port map. Configuration is passed as ports, the same way data is.
-Wasmtime verifies the contract at instantiation time, rejecting a component with wrong
-signatures immediately. The specific ports a codec expects inside the port map are
-declared in a JSON signature sidecar and validated by the orchestrator before any
-component is called.
+## Architecture
 
-The Component Model also makes this practical at ecosystem scale. Any language
-with a Component Model toolchain — Rust, C, Python via componentize-py, and
-others — can implement the WIT interface, so codec authors work in whatever
-language suits them and participate in the same ecosystem without needing to
-know each other's. Each component runs in the Wasmtime sandbox with no access
-to the host filesystem, network, or memory outside its own linear region, so
-distributing and executing third-party codecs is safe by construction.
-
-The alternative — core Wasm modules with a bespoke multi-port calling
-convention — could support fan-in/fan-out in principle, but would require
-every codec author to implement a shared protocol with no tooling support and
-no interface verification. The Component Model removes that burden.
-
-For a full accounting of copy counts per edge type and per pipeline step, and analysis of copy-reduction approaches, see [docs/internals/DATA_COPIES.md](docs/internals/DATA_COPIES.md).
-
-## Architecture overview
-
-```
-+------------------------------------------------------+
-|                     Python Host                      |
-|                                                      |
-|  +----------------+   +---------------------------+  |
-|  |  Codec Cache   |   |       Orchestrator        |  |
-|  |                |   |                           |  |
-|  |  fetch .wasm   |   |  parse pipeline JSON      |  |
-|  |  cache local   |   |  topological sort DAG     |  |
-|  |                |   |  wire ports by name       |  |
-|  |                |   |  drive execution loop     |  |
-|  +----------------+   +---------------------------+  |
-|                                                      |
-+----------------------------+-------------------------+
-                             | Wasmtime
-             +---------------+---------------+
-             |               |               |
-     +-------+-------+ +-----+-------+ +-----+-------+
-     | Component A   | | Component B | | Component C |
-     | (Rust)        | | (C)         | | (Python)    |
-     |               | |             | |             |
-     | WIT: encode   | | WIT: encode | | WIT: encode |
-     |      decode   | |      decode | |      decode |
-     +---------------+ +-------------+ +-------------+
+```text
++-------------------------------------------------------+
+|                      Python Host                       |
+|                                                        |
+|  +----------------+    +---------------------------+   |
+|  |  Codec Cache   |    |       Orchestrator        |   |
+|  |                |    |                           |   |
+|  |  fetch .wasm   |    |  parse pipeline JSON      |   |
+|  |  cache local   |    |  topological sort DAG     |   |
+|  |                |    |  wire ports by name       |   |
+|  |                |    |  validate signatures      |   |
+|  |                |    |  drive execution loop     |   |
+|  +----------------+    +---------------------------+   |
+|                                                        |
++----------------------------+---------------------------+
+                             |
+          +------------------+------------------+
+          |                  |                  |
+  +-------+-------+  +------+------+  +--------+------+
+  | Component     |  | Core Wasm   |  | Native        |
+  | Model Wasm    |  | Module      |  | (numcodecs)   |
+  |               |  |             |  |               |
+  | WIT interface |  | Binary      |  | Python codec  |
+  | canonical ABI |  | port-map    |  | object        |
+  +---------------+  +-------------+  +---------------+
 ```
 
 The Python host has two responsibilities:
 
-**Codec cache:** Fetches `.wasm` component files and their `.signature.json`
-sidecars referenced in the pipeline JSON (via `file://`, `https://`, or
-`oci://` URIs) and caches them locally to avoid redundant network requests.
-Wasmtime's built-in compilation cache handles compiled `.cwasm` artifacts
-separately and transparently.
+**Codec cache:** Fetches `.wasm` files referenced in the pipeline JSON (via `file://`, `https://`, or `oci://` URIs) and caches them locally to avoid redundant network requests. Signatures are embedded in the `.wasm` binary as `chonkle:signature` custom sections -- no sidecar files. Wasmtime's built-in compilation cache handles compiled `.cwasm` artifacts separately.
 
-**Orchestrator:** Parses the pipeline DAG JSON, resolves wiring between step
-outputs and inputs by name, determines execution order via topological sort,
-validates each step's port declarations against its signature before execution,
-and drives the Wasmtime execution loop — calling each component's `encode` or
-`decode` function in order and routing the named port outputs to the
-appropriate next step inputs.
+**Orchestrator:** Parses the pipeline DAG JSON, resolves codec_ids to `Codec` instances via the `Resolver` (local store, native signatures, or pipeline source URIs), validates wiring against codec signatures, and executes the DAG by calling each codec's `encode` or `decode` in topological order. Pipeline direction inversion is supported: running a pipeline in the opposite direction reverses step order and calls the opposite function.
 
 ## Pipeline JSON
 
-A pipeline is a directed acyclic graph of codec steps. Each step names a codec
-component (by URI) and wires its inputs to pipeline inputs, constants, or
-outputs of previous steps.
-
-### Schema
+A pipeline is a DAG of codec steps. Each step names a codec by `codec_id` and wires its inputs to pipeline inputs, constants, or outputs of other steps.
 
 ```json
 {
-  "codec_id": "parquet-page-decode",
+  "codec_id": "cog-decode",
   "direction": "decode",
-  "inputs": {
-    "bytes": {"type": "bytes"},
-    "rep_length": {"type": "uint"},
-    "def_length": {"type": "uint"}
+  "sources": {
+    "tiff-predictor-2": "oci://ghcr.io/nasa-impact/codec-tiff-predictor-2-c:v1.0"
   },
+  "inputs": {"bytes": {"type": "bytes"}},
   "constants": {
-    "index_bit_width": {"type": "int", "value": 4},
-    "def_bit_width": {"type": "int", "value": 1},
-    "rep_bit_width": {"type": "int", "value": 1}
+    "bytes_per_sample": {"type": "int", "value": 2},
+    "width": {"type": "int", "value": 1024}
   },
-  "outputs": {
-    "values": "decode_values.bytes",
-    "def": "decode_def.bytes",
-    "rep": "decode_rep.bytes"
-  },
+  "outputs": {"bytes": "predictor2.bytes"},
   "steps": {
-    "decompress": {
-      "codec_id": "zstd",
-      "src": "https://example.org/codecs/zstd.wasm",
-      "inputs": {
-        "bytes": "input.bytes"
-      },
-      "outputs": ["bytes"]
+    "zlib": {
+      "codec_id": "zlib",
+      "inputs": {"bytes": "input.bytes"}
     },
-    "split": {
-      "codec_id": "parquet-page-v2-split",
-      "src": "https://example.org/codecs/parquet-page-v2-split.wasm",
+    "predictor2": {
+      "codec_id": "tiff-predictor-2",
       "inputs": {
-        "bytes": "decompress.bytes",
-        "rep_length": "input.rep_length",
-        "def_length": "input.def_length"
-      },
-      "outputs": ["rep_bytes", "def_bytes", "value_bytes"]
-    },
-    "decode_values": {
-      "codec_id": "rle-parquet",
-      "src": "https://example.org/codecs/rle-parquet.wasm",
-      "inputs": {
-        "bytes": "split.value_bytes",
-        "bit_width": "constant.index_bit_width"
-      },
-      "outputs": ["bytes"]
-    },
-    "decode_def": {
-      "codec_id": "rle-parquet",
-      "src": "https://example.org/codecs/rle-parquet.wasm",
-      "inputs": {
-        "bytes": "split.def_bytes",
-        "bit_width": "constant.def_bit_width"
-      },
-      "outputs": ["bytes"]
-    },
-    "decode_rep": {
-      "codec_id": "rle-parquet",
-      "src": "https://example.org/codecs/rle-parquet.wasm",
-      "inputs": {
-        "bytes": "split.rep_bytes",
-        "bit_width": "constant.rep_bit_width"
-      },
-      "outputs": ["bytes"]
+        "bytes": "zlib.bytes",
+        "bytes_per_sample": "constant.bytes_per_sample",
+        "width": "constant.width"
+      }
     }
   }
 }
 ```
 
-Each step declares both its `inputs` (wiring references) and its `outputs`
-(port names). Technically, the orchestrator could derive output port names
-entirely from each codec's signature, making `outputs` in the pipeline JSON
-redundant. It is included here deliberately: a pipeline should be readable
-and verifiable by a human without cross-referencing external signatures.
-The orchestrator validates the declared `outputs` against the codec signature
-in a pre-execution validation pass — a mismatch is an error.
+Key schema points:
 
-### Relationship to the codec inventory
+- `codec_id` at the pipeline level identifies the pipeline itself (a pipeline is itself a codec)
+- Each key in `steps` is the unique DAG node identifier, used in wiring references
+- `sources` (pipeline level, optional) maps codec_ids to download URIs, used as advisory fetch hints when a codec is not in the local store
+- Wiring reference forms: `input.<name>`, `constant.<name>`, `<step_name>.<port>`
+- Step output ports are not declared in the pipeline; they come from codec signatures and are validated at `prepare()` time
+- Constants are JSON-encoded as bytes and passed through port-maps alongside data ports
 
-The schema is designed to align with the codec signature and pipeline
-model defined in
-[protospec/codec-inventory.md](https://github.com/cylf-dev/protospec/blob/main/codec-inventory.md).
-The wiring syntax (`input.<name>`, `<step>.<output>`, `constant.<name>`),
-the typed port model, and the distinction between `encode_only` and
-bidirectional inputs all follow the inventory's definitions. However, a number of divergences exist between the protospec and the pipeline schema shown above:
+## Codec signatures
 
-- **`"codec"` renamed to `"codec_id"` in steps.** `codec_id` is the consistent
-  term throughout the schema; `codec` would be the only place the shorter form
-  appeared.
-- **`src` added to steps (required for now).** The protospec assumes a registry
-  that resolves codecs by `codec_id`; no registry exists yet. `src` is a direct
-  URI to the `.wasm` file and will become optional once a registry is in place.
-- **Step `outputs` is an array of port names, not an alias object.** The
-  protospec maps codec port names to local wiring aliases
-  (`{"bytes": "raw_uints"}`). Our wiring references use codec port names
-  directly (`step_name.port_name`), making the alias layer unnecessary.
-- **`encode_only` permitted on pipeline inputs.** The protospec shows
-  `encode_only` only on codec signature inputs. A pipeline's derived codec
-  signature needs these annotations so outer pipelines know which inputs to
-  omit during decode.
-- **`encode_only_inputs` added to steps.** The protospec records `encode_only`
-  in the codec signature. Surfacing it on the step keeps the pipeline
-  self-contained for routing at parse time, before signatures are loaded.
+Each `.wasm` binary contains a `chonkle:signature` custom section with the codec signature as JSON:
 
-The full divergence log lives in [docs/reference/PIPELINE_SCHEMA.md](docs/reference/PIPELINE_SCHEMA.md).
+```json
+{
+  "codec_id": "zstd",
+  "implementation": "zstd-rs",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "level": {"type": "int", "required": false, "default": 3, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  }
+}
+```
 
-## Format drivers and the executor boundary
+Signatures are embedded at build time using `chonkle embed-signature <wasm> <sig.json>`. The `implementation` field identifies the specific build that produced the binary. Ports marked `encode_only` are excluded from the valid input set during decode.
 
-This executor is format-agnostic. It accepts a pipeline DAG and chunk data,
-runs the codecs in order, and returns the result. It has no knowledge of
-Zarr, Parquet, COG, ORC, or any other file format.
+## WIT interface (Component Model)
 
-A **format driver** is the layer above the executor that bridges a specific
-file format and this executor. Its responsibilities are:
+Defined in `wit/codec.wit`:
 
-- Read format-specific metadata (Zarr `.zarray`, Parquet page headers, TIFF
-  IFDs, etc.) and translate it into a pipeline DAG JSON that this executor
-  can run
-- Supply pipeline inputs that come from file metadata rather than chunk data
-  — for example, `rep_length` and `def_length` from a Parquet page header,
-  or `element_size` from a Zarr array descriptor
-- Manage chunk I/O — fetching raw chunk bytes from storage and passing them
-  to the executor, then storing the results
+```wit
+package chonkle:codec@0.1.0;
 
-Format drivers are outside the scope of this repository. The pipeline JSON
-examples here are written as a format driver would produce them, not as
-something a user would typically author by hand. In production use, pipelines
-would be generated programmatically from file metadata, not hand-rolled.
+interface transform {
+    type port-name = string;
+    type port-map = list<tuple<port-name, list<u8>>>;
 
-## Status
+    encode: func(inputs: port-map) -> result<port-map, string>;
+    decode: func(inputs: port-map) -> result<port-map, string>;
+}
 
-Proof of concept. Not production ready.
+world codec {
+    export transform;
+}
+```
+
+Component Model codecs implement this interface. Any language with a Component Model toolchain can produce a conforming `.wasm` component.
+
+## Usage
+
+### CLI
+
+```bash
+# Run a pipeline
+chonkle run --pipeline pipeline.json --input bytes=chunk.bin --output bytes=out.bin
+
+# With resolver options
+chonkle run --pipeline pipeline.json --input bytes=chunk.bin \
+  --codec-store ./codec/ \
+  --preference core,component,native \
+  --override zlib=./my-zlib.wasm
+
+# List installed codecs
+chonkle codecs
+
+# Show details for a specific codec
+chonkle codecs zlib
+
+# Embed a signature into a .wasm binary (build-time tool)
+chonkle embed-signature codec.wasm signature.json
+```
+
+### Python API
+
+```python
+from chonkle.pipeline import prepare
+from chonkle.executor import run
+
+prepared = prepare("pipeline.json", direction="decode")
+outputs = run(prepared, {"bytes": chunk_bytes})
+```
+
+## Format drivers
+
+The executor is format-agnostic. It accepts a pipeline DAG and chunk data, runs the codecs, and returns the result. It has no knowledge of Zarr, Parquet, COG, ORC, or any other file format.
+
+A **format driver** is the layer above the executor that bridges a specific file format and the pipeline executor. It reads format-specific metadata, translates it into a pipeline DAG, supplies metadata-derived inputs, and manages chunk I/O. Format drivers are outside the scope of this repository.
+
+## Development
+
+- **Package manager**: uv
+- **Build backend**: hatchling
+- **Python**: >= 3.13
+- **Linting/formatting**: ruff
+- **Type checking**: mypy
+- **Testing**: pytest
+- **Pre-commit**: ruff check, ruff format, mypy, yaml/toml validation
+- **CI**: GitHub Actions (lint on 3.14, test on 3.13 and 3.14)
+
+```bash
+# Install dependencies
+uv sync
+
+# Run tests
+uv run pytest
+
+# Run linter
+uv run ruff check
+
+# Network tests (downloads codecs from OCI registries)
+uv run pytest --run-network
+```
 
 ## Acknowledgements
 

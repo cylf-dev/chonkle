@@ -1,39 +1,52 @@
 # Caching
 
-This document describes how caching currently works in chonkle and what we've considered but haven't implemented yet.
+Chonkle uses three layers of caching to avoid redundant downloads, recompilation, and re-instantiation. Each layer answers a different question:
 
-## Wasm file download cache
+| Layer             | What it caches                      | Where                | Managed by            |
+| ----------------- | ----------------------------------- | -------------------- | --------------------- |
+| Codec store       | Downloaded `.wasm` binaries         | `~/.chonkle/codecs/` | chonkle               |
+| Compilation cache | Compiled native machine code        | OS cache dir         | wasmtime              |
+| In-process        | Compiled modules and live instances | Memory               | codec wrapper objects |
 
-Downloaded `.wasm` files are cached on disk to avoid redundant network fetches. See `wasm_download.py`.
+A cold start (first run with a new codec) hits all three layers. A warm start (same codec, same wasmtime version) skips the download and recompilation entirely.
 
-- **HTTPS**: keyed by `sha256(url)`, stored at `<cache_dir>/https/<hash>/<filename>`
-- **OCI**: keyed by registry reference, stored at `<cache_dir>/oci/<ref_path>/`
-- **Default location**: `$TMPDIR/chonkle/wasm/` (overridable via `CHONKLE_CACHE_DIR`)
-- **Force re-download**: `CHONKLE_FORCE_DOWNLOAD=1` or `force=True` parameter
-- **Atomic writes**: HTTPS downloads use tempfile + rename to avoid partial files
+## Codec store
 
-There is no eviction, TTL, or size management. However, Wasm modules are small (typically KBs), the default `$TMPDIR` location is cleaned by the OS periodically, and the force-download provides an escape hatch for stale cache scenarios. A more robust cache can be implemented in the future if needed.
+The codec store is the only durable cache for downloaded Wasm binaries. It lives at `~/.chonkle/codecs/` (overridable via `CHONKLE_CODEC_STORE`) and is organized by codec_id:
 
-## wasmtime compiled-code disk cache
+```text
+~/.chonkle/codecs/
+  zlib/
+    zlib-rs.wasm
+  tiff-predictor-2/
+    tiff-predictor-2-c.wasm
+```
 
-Every codec call in `executor.py` creates a `wasmtime.Engine` and compiles the `.wasm` file to native machine code — via `Module.from_file()` on the Core path or `Component.from_file()` on the Component path. This compilation is the most expensive per-call overhead in the Wasm path.
+The filename comes from the `implementation` field in the binary's embedded signature.
 
-To avoid this repeated compilation, the Engine is configured with wasmtime's built-in compiled-code cache (`config.cache = True`). wasmtime transparently stores compiled native code on disk. When `Module.from_file()` or `Component.from_file()` is called for a `.wasm` file that has already been compiled with the same wasmtime version, the cached native code is loaded instead of recompiling.
+**Population:** When a pipeline declares a `sources` URI for a codec that is not already in the store, the binary is downloaded to a temporary directory, then copied into the store. Subsequent resolutions for the same codec_id skip the download.
 
-This is separate from the download cache above: the download cache stores `.wasm` files to avoid network fetches, while the compilation cache stores native machine code to avoid recompilation.
+**Invalidation:** Manual. Delete the directory or set `CHONKLE_FORCE_INSTALL=1` to overwrite an existing entry on next download.
 
-wasmtime manages the cache location and eviction automatically (`~/.cache` on Linux, `~/Library/Caches` on macOS). The cache invalidates automatically when the wasmtime version changes.
+**Integrity:** HTTPS downloads write to a tempfile and rename on completion, avoiding partial files.
 
-## In-process caching
+## Compilation cache
 
-`executor.py` currently creates a new `wasmtime.Engine`, `wasmtime.component.Linker`, and `wasmtime.component.Component` on each `_call_component()` invocation. Timing instrumentation in `_call_component()` (see [CANONICAL_ABI_PERF.md](CANONICAL_ABI_PERF.md)) showed that with a warm disk cache, `Component.from_file()` costs ~0.003s and `Store`/`Linker` construction is essentially free.
+Wasmtime maintains a separate disk cache of compiled native machine code (`config.cache = True`). When a `.wasm` file is loaded, wasmtime checks this cache before compiling. On a hit, precompiled native code is loaded directly.
 
-Although negligible, if these initialization costs were a concern, the approach would be to cache at module level:
+This is orthogonal to the codec store: the codec store holds portable `.wasm` binaries; the compilation cache holds platform-specific compiled output derived from them.
 
-- `_engine` — `wasmtime.Engine` singleton, created once with `cache = True`
-- `_linker` — `wasmtime.component.Linker` singleton, created once with `add_wasip2()`
-- `_component_cache` — `dict[Path, wasmtime.component.Component]`, keyed by resolved `.wasm` path
+**Location:** Managed by wasmtime (`~/.cache` on Linux, `~/Library/Caches` on macOS).
 
-Cache invalidation on `force_download=True` would require evicting `_component_cache` entries for affected paths after URI resolution.
+**Invalidation:** Automatic when the wasmtime version changes.
 
-Note that `Store` and `Instance` hold mutable Wasm linear memory and should still be created fresh per call.
+**Cost:** With a warm compilation cache, loading a component costs ~0.003s (see [CANONICAL_ABI_PERF.md](CANONICAL_ABI_PERF.md)).
+
+## In-process lifetime
+
+Codec wrapper objects compile and instantiate Wasm modules once during pipeline preparation, not on every codec call:
+
+- **Component codecs** load and compile the component at init time. Each call creates only a new store and instance (mutable Wasm state that cannot be reused across calls).
+- **Core codecs** load, compile, and instantiate the module at init time, keeping the instance and its linear memory alive for the codec's lifetime. The persistent instance enables single-copy data transfer between core codecs via direct memory access.
+
+All codec instantiations share a single wasmtime engine, which in turn shares the compilation cache.

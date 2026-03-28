@@ -1,12 +1,19 @@
 # codec/
 
-Wasm Component Model codec implementations for the chonkle pipeline.
+Wasm codec implementations for the chonkle pipeline. Codecs fall into two categories:
 
-Each codec exports `chonkle:codec/transform` (`encode` + `decode`). See
-[docs/reference/CODEC_CONTRACT.md](../docs/reference/CODEC_CONTRACT.md) for
-the full contract, port conventions, and signature sidecar format.
+- **Component Model codecs** implement the `chonkle:codec/transform` WIT interface and are lifted to Component Model `.wasm` binaries. See [docs/reference/CODEC_CONTRACT.md](../docs/reference/CODEC_CONTRACT.md).
+- **Core Wasm codecs** are wasm32-wasi reactor modules that export `memory`, `alloc`, `dealloc`, `encode`, and `decode` using the binary port-map wire format. See [docs/reference/CORE_ABI.md](../docs/reference/CORE_ABI.md).
 
-## Codecs
+All codec build processes include a post-build step to embed the codec signature into the `.wasm` binary:
+
+```
+chonkle embed-signature <output.wasm> signature.json
+```
+
+Each codec directory contains a `signature.json` build input that is embedded as a `chonkle:signature` custom section.
+
+## Component Model codecs
 
 ### identity-c/
 
@@ -21,6 +28,7 @@ Toolchain: C + `zig cc` → wasm32-wasi reactor → `wasm-tools` component lift.
 cd codec/identity-c
 zig build
 cp zig-out/identity.wasm identity.wasm
+chonkle embed-signature identity.wasm signature.json
 ```
 
 ### tiff-predictor-2-c/
@@ -38,6 +46,7 @@ Same toolchain as identity-c.
 cd codec/tiff-predictor-2-c
 zig build -Doptimize=ReleaseFast
 cp zig-out/tiff-predictor-2.wasm tiff-predictor-2.wasm
+chonkle embed-signature tiff-predictor-2.wasm signature.json
 ```
 
 ### zlib-rs/
@@ -54,19 +63,39 @@ Toolchain: `cargo-component` targeting `wasm32-wasip2`.
 cd codec/zlib-rs
 cargo component build --target wasm32-wasip2 --release
 cp target/wasm32-wasip1/release/zlib.wasm zlib.wasm
+chonkle embed-signature zlib.wasm signature.json
+```
+
+## Core Wasm codecs
+
+### identity-core-c/
+
+Passthrough codec for benchmarking using the core ABI. `encode` and `decode` are both no-ops: output `bytes` = input `bytes`. Uses the binary port-map wire format instead of the Component Model canonical ABI.
+
+Ports: `bytes` in → `bytes` out.
+
+Exports: `memory`, `alloc`, `dealloc`, `encode`, `decode`.
+
+Toolchain: C + `zig cc` → wasm32-wasi reactor (no Component Model lift step). Same build toolchain as identity-c and tiff-predictor-2-c but without the `wasm-tools component new` step.
+
+```
+cd codec/identity-core-c
+zig build
+cp zig-out/identity-core.wasm identity-core.wasm
+chonkle embed-signature identity-core.wasm signature.json
 ```
 
 ---
 
 ## Shared C infrastructure — shared/
 
-Used by all C+Zig codecs:
+Used by C+Zig codecs:
 
-- **codec.h** / **codec.c** — WIT-generated canonical ABI bindings
-- **codec_component_type.o** — component type object produced by wit-bindgen;
-  passed to `zig cc` as a source file alongside the C sources
+- **codec.h** / **codec.c** — WIT-generated canonical ABI bindings for Component Model codecs
+- **codec_component_type.o** — component type object produced by wit-bindgen; passed to `zig cc` as a source file alongside the C sources
+- **core_abi.h** / **core_abi.c** — C reference implementation of the core ABI port-map parse/serialize/find operations, used by core wasm codecs like identity-core-c
 
-Regenerate after any WIT interface change:
+Regenerate WIT bindings after any WIT interface change:
 
 ```
 wit-bindgen c wit/ --world codec --out-dir codec/shared/
@@ -83,10 +112,20 @@ GitHub release to match the `wasmtime` Python package version.
 
 ## Adding a codec
 
+### Component Model codec
+
 1. Implement `encode` and `decode` for the `chonkle:codec/transform` WIT interface.
 2. Build to a Component Model `.wasm` and place it in `codec/<name>/`.
-3. Write a `<name>.signature.json` sidecar in the same directory.
-4. Add a `.gitignore` for your toolchain's build artifacts.
+3. Write a `signature.json` in the codec directory.
+4. Embed the signature: `chonkle embed-signature <name>.wasm signature.json`.
+5. Add a `.gitignore` for your toolchain's build artifacts.
 
-See [docs/reference/CODEC_CONTRACT.md](../docs/reference/CODEC_CONTRACT.md)
-for the signature format and port conventions.
+### Core Wasm codec
+
+1. Implement and export `memory`, `alloc`, `dealloc`, `encode`, and `decode` per the [core ABI spec](../docs/reference/CORE_ABI.md).
+2. Build to a core wasm32-wasi `.wasm` and place it in `codec/<name>/`.
+3. Write a `signature.json` in the codec directory.
+4. Embed the signature: `chonkle embed-signature <name>.wasm signature.json`.
+5. Add a `.gitignore` for your toolchain's build artifacts.
+
+See [docs/reference/CODEC_CONTRACT.md](../docs/reference/CODEC_CONTRACT.md) for the Component Model signature format and port conventions, or [docs/reference/CORE_ABI.md](../docs/reference/CORE_ABI.md) for the core ABI contract.

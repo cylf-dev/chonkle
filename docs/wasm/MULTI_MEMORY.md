@@ -4,9 +4,11 @@ This document summarizes the feasibility of using the WASM multi-memory feature 
 
 ## The current design
 
-Chonkle creates one `wasmtime.Memory` per pipeline run. Every codec module imports it as its sole memory (memory index 0). The host writes pipeline input at `DATA_PLANE_BASE` (4 MB) and each step's output is appended via a bump allocator. Between steps, only an `(offset, length)` tuple is handed off — zero copies.
+Each core wasm codec module has its own linear memory (created at instantiation via `CoreWasmCodec`). The host serializes input port-maps into the destination module's memory via `Memory.write()`, and reads output port-maps after the codec call.
 
-The region below `DATA_PLANE_BASE` (0–4 MB) is reserved for each module's internal state: data segments, shadow stack, and heap. These are placed at compile-time-fixed offsets starting near address 0.
+Between sequential core wasm steps, data transfers use single-copy: the host allocates in the destination module via `alloc()`, obtains raw pointers to both memories via `Memory.data_ptr()`, and performs `ctypes.memmove` — one copy at native speed (~10 GB/s). Bulk data stays in linear memory as `CoreWasmRef` deferred references until consumed.
+
+This design replaced an earlier shared-memory approach where all modules operated on a single `wasmtime.Memory`. The separate-memory design enables module instances to coexist (required for single-copy transfer) and avoids the data segment collision problem described below.
 
 ## The data segment collision problem
 
@@ -89,23 +91,25 @@ This is the most practical path to simultaneous instantiation if it becomes nece
 
 ## Where the current design stands
 
-For sequential execution of library-wrapping codecs, the current single-shared-memory design is optimal:
+The current separate-memory design with single-copy transfer is a practical middle ground:
 
-- 0 copies between steps (pointer hand-off via `pointer_store`)
-- 0 copies within a step (the library reads/writes the shared memory directly because it is memory 0)
+- 1 copy between core wasm steps (ctypes.memmove at ~10 GB/s)
+- 0 copies within a step (the library reads/writes its own memory 0 directly)
 - No toolchain constraints (standard `wasm32-wasip1` compilation works)
-- Data segment collision is harmless because only one module is active at a time
+- Module instances can coexist (each has its own linear memory)
+- No data segment collision (each module writes to its own memory)
 
-Multi-memory would only become worth the complexity if parallel execution of independent DAG branches is needed and the intra-step copy penalty (for library-wrapping codecs) or compile-time `--global-base` coordination is acceptable.
+Multi-memory would only become worth the complexity if zero-copy between steps is needed and the intra-step copy penalty (for library-wrapping codecs) or compile-time `--global-base` coordination is acceptable. The current single-copy approach already achieves ~10 GB/s throughput per edge, which is orders of magnitude faster than the canonical ABI path.
 
-## Component Model comparison
+## Comparison across approaches
 
-The Component Model provides composability and isolation but at a higher copy cost. Each component has its own linear memory, and the canonical ABI copies data across every component boundary. For a pipeline of N codec steps:
+Each approach has different copy characteristics for a pipeline of N codec steps:
 
-| Approach | Copies between steps |
-|----------|---------------------|
-| Core modules, shared memory (current chonkle) | 0 |
-| Component Model, sync `list<u8>` (WASI 0.2) | N-1 |
-| Component Model, `stream<u8>` (WASI 0.3) | N-1 per chunk |
+| Approach | Copies between steps | Copy speed |
+|----------|----------------------|------------|
+| Core modules, separate memories (current chonkle) | 1 per edge (~10 GB/s) | ctypes.memmove |
+| Core modules, shared memory (former chonkle design) | 0 | n/a |
+| Component Model, sync `list<u8>` (WASI 0.2) | 2 per edge (~1.7 MB/s) | canonical ABI |
+| Component Model, `stream<u8>` (WASI 0.3) | 2 per edge per chunk | canonical ABI |
 
 Features that could reduce Component Model copy overhead (caller-supplied buffers, copy-on-write blob resources) are post-0.3.0 or post-MVP with no committed timeline. See [COMPONENT_MODEL.md](COMPONENT_MODEL.md) for more on the Component Model.
