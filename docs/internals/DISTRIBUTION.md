@@ -1,140 +1,55 @@
-# Remote Storage Options for .wasm Files
+# Codec Distribution Strategy
 
-This document compares approaches for making `.wasm` build artifacts publicly available for download.
+## Context
 
-## GitHub Releases
+Chonkle produces three kinds of codec backends:
 
-Releases let you attach binary assets to tagged versions of a repository.
+- **Component Model Wasm** — compiled to a Component Model component binary with a typed WIT interface
+- **Core Wasm** — compiled to a plain wasm module using a binary port-map wire format with raw `alloc`/`dealloc`/`encode`/`decode` exports; ABI is incompatible with the Component Model
+- **Native** — Python numcodecs wrappers; distributed as Python packages through standard Python packaging, not as Wasm artifacts
 
-### How it works
+This document covers distribution of the two Wasm backends only.
 
-1. Tag a version in the repo (e.g., `v0.1.0`)
-2. CI builds the `.wasm` file
-3. CI creates a release and attaches the `.wasm` as an asset using `gh release create` or the `softprops/action-gh-release` action
+## Decision
 
-Download URL follows a predictable pattern:
+Publish Wasm codec artifacts to **GitHub Releases** (as release assets) and **GHCR** (as OCI artifacts) in parallel. Defer distribution via warg / wa.dev until the tooling matures.
 
-```text
-https://github.com/{owner}/{repo}/releases/download/{tag}/file.wasm
-```
+## Options considered
 
-The latest release can be queried via the GitHub API.
+### GitHub Releases
 
-### Pros
+Attach `.wasm` files as assets to tagged releases via CI (`gh release create` or `softprops/action-gh-release`). Download URL follows a predictable pattern; no authentication required for public repos. Consumers fetch with a plain HTTP GET.
 
-- Simple HTTP GET to download — no special tooling needed on the consumer side
-- Trivial CI setup
-- No authentication required for public repos
-- Versioned naturally via git tags
-- 2 GB per file limit
+**Key trade-off:** zero consumer tooling requirement, but no registry semantics — no namespacing, media types, or manifest metadata. Not where the Wasm ecosystem is heading.
 
-### Cons
+### GitHub Container Registry (GHCR) with OCI artifacts
 
-- Not a registry — no standardized discovery, search, or metadata beyond what GitHub provides
-- No concept of namespaces, media types, or multi-artifact manifests
-- Consumers must know the exact repo and tag to fetch from
+Push `.wasm` files as OCI artifacts to `ghcr.io` using [`oras`](https://oras.land/). Anonymous pulls for public packages; supports rich metadata via OCI manifests. OCI is the distribution substrate the broader Wasm ecosystem is converging on — wasmCloud, Spin, and Bytecode Alliance tooling all use it.
 
-## GitHub Packages (language-specific registries)
+**Key trade-off:** consumers need an OCI client rather than a plain HTTP GET, and the Python OCI client ecosystem is less mature. The complexity is real but bounded.
 
-GitHub Packages is an umbrella that hosts several package registries: npm, Maven, NuGet, and a Docker/OCI registry. The Docker/OCI registry is **GitHub Container Registry (GHCR)**, which is covered separately below because it works fundamentally differently — it supports arbitrary binary artifacts and anonymous public access. This section covers the language-specific registries only.
+### warg / wa.dev
 
-### How it works
+The Bytecode Alliance's [warg](https://warg.io/) registry protocol, with [wa.dev](https://wa.dev/) as the public instance. Built around the Component Model: artifacts are expected to be component binaries that declare typed WIT interfaces; packages are addressed as `namespace:name@version`. Built on OCI transport; higher-level registries like wa.dev build the Component Model protocol on top of it. Active tooling lives in [`wasm-pkg-tools`](https://github.com/bytecodealliance/wasm-pkg-tools) (`wkg` CLI).
 
-The language-specific registries have no generic binary support. To use them for `.wasm` files, you would need to wrap the artifact in a supported package format — for example, publishing an npm package that contains the `.wasm` file, which consumers would install via npm/yarn.
+**Key trade-off:** the most semantically correct home for Component Model codecs, but the original warg registry implementation is no longer actively developed and the tooling is early-stage. Core Wasm codecs are incompatible with the Component Model ABI and cannot be published here regardless of tooling maturity.
 
-### Pros
+### GitHub Packages (language-specific registries)
 
-- Integrates with existing package manager workflows if consumers already use npm, Maven, etc.
-- Scoped to the repository that published it
-- Free for public repos
+npm, Maven, NuGet, etc. No native support for generic binary artifacts — distribution would require wrapping `.wasm` files in a language-specific package format. Not applicable.
 
-### Cons
+## Rationale
 
-- No native support for generic binary artifacts — you must shoehorn `.wasm` into a package format
-- npm packages require `npm install` to consume, adding a Node.js dependency for non-JS consumers
-- Most GitHub Packages registries require authentication even for public packages (Docker/GHCR is the exception)
-- Adds unnecessary packaging overhead and complexity for a single `.wasm` file
+The dual Releases + GHCR approach covers both consumption patterns that matter today:
 
-## GitHub Container Registry (GHCR) with OCI Artifacts
+- Releases provides a zero-friction path for consumers who just need to download a file
+- GHCR aligns with the ecosystem trajectory and supports richer metadata
 
-GHCR (`ghcr.io`) is the OCI-compliant registry within GitHub Packages. While technically part of the same product, it behaves very differently from the language-specific registries above: it supports arbitrary OCI artifacts (not just Docker images), allows anonymous pulls for public packages, and is scoped to orgs/users rather than individual repos.
+warg / wa.dev is the right long-term home for Component Model codecs specifically, but migrating to it requires both tooling maturity and a decision about how to handle Core Wasm codecs (which are ineligible). Until that is resolved, a format-agnostic mechanism is necessary anyway.
 
-OCI is the distribution substrate the broader Wasm ecosystem is converging on; higher-level registries like warg/wa.dev build the Component Model registry protocol on top of it.
+## Consequences
 
-### How it works
-
-1. CI builds the `.wasm` file
-2. Push the `.wasm` as an OCI artifact using a tool like [`oras`](https://oras.land/):
-
-```bash
-oras push ghcr.io/{owner}/{repo}:v0.1.0 codec.wasm:application/wasm
-```
-
-1. Consumers pull it with:
-
-```bash
-oras pull ghcr.io/{owner}/{repo}:v0.1.0
-```
-
-Or use an OCI client library in their language of choice.
-
-### Pros
-
-- OCI registries are becoming the standard distribution mechanism for Wasm modules (used by wasmCloud, Spin, Bytecode Alliance tooling, etc.)
-- Supports rich metadata via OCI manifests (media types, annotations, multi-platform artifacts)
-- Public packages on GHCR do not require authentication to pull
-- Free for public repos
-- Standardized protocol enables interoperability — artifacts could move to any OCI-compliant registry
-
-### Cons
-
-- More complex CI setup than Releases
-- Consumers need an OCI client rather than a simple HTTP GET
-- Python OCI client library ecosystem is less mature than HTTP libraries
-- Less familiar to contributors who haven't worked with OCI outside of Docker
-
-## Wasm Component Registry (warg / wa.dev)
-
-The Bytecode Alliance has developed [warg](https://warg.io/), a registry protocol for Wasm packages, with [wa.dev](https://wa.dev/) as the public registry instance. The underlying transport is OCI, and the active tooling lives in the [`wasm-pkg-tools`](https://github.com/bytecodealliance/wasm-pkg-tools) project (the `wkg` CLI).
-
-### Component Model orientation
-
-warg and wa.dev are built around the [WebAssembly Component Model](https://component-model.bytecodealliance.org/), a higher-level abstraction on top of core WebAssembly. The registry expects artifacts to be Component Model components — a binary format distinct from plain wasm modules. Components declare typed interfaces using WIT (WebAssembly Interface Types), and the registry can index that metadata for discovery. Packages are addressed as `namespace:name@version` (a warg protocol convention), and even WIT interface definitions are compiled to wasm and published as packages.
-
-chonkle codecs are **Component Model components** — they declare typed WIT interfaces and are compiled to component binaries. This is exactly what warg/wa.dev is designed to index and distribute, making it a natural fit for the project.
-
-### Pros
-
-- Purpose-built for Wasm distribution — the most "correct" long-term home for Wasm artifacts
-- Federated and decentralized by design — multiple registries can be linked
-- Rich metadata, namespacing, and type-safe interoperability for components
-- Built on OCI, so the underlying transport is standardized
-
-### Cons
-
-- Still maturing — the original warg registry implementation is no longer actively developed, with work continuing in `wasm-pkg-tools`
-- Tooling and ecosystem are early-stage
-
-## Comparison
-
-| | Releases | Packages | GHCR (OCI) | warg / wa.dev |
-| --- | --- | --- | --- | --- |
-| Setup complexity | Low | Medium | Medium | High |
-| Consumer complexity | Low (HTTP GET) | Medium (package manager) | Medium (OCI client) | Medium (wkg CLI) |
-| Auth required (public) | No | Yes (most registries) | No | No |
-| Generic binary support | Yes | No (must wrap in package format) | Yes (OCI artifacts) | No (Component Model) |
-| Discovery / metadata | Minimal | Package manager conventions | OCI manifests, annotations | Rich (Component Model interfaces, namespaces) |
-| Ecosystem alignment | Generic | Language-specific | Wasm-native direction | Wasm-native (Component Model) |
-| Versioning | Git tags | Package versions | OCI tags / digests | Semantic (namespace:name@ver) |
-| Maturity | Stable | Stable | Stable | Early-stage |
-
-## Current approach
-
-Codec repositories use a single GitHub Actions workflow that publishes `.wasm` files to both **GitHub Releases** (as release assets) and **GHCR** (as OCI artifacts). This provides two consumption paths:
-
-- **GitHub Releases** — simple HTTP GET, no tooling required on the consumer side
-- **GHCR** — OCI-based distribution, aligned with where the Wasm ecosystem is heading
-
-**warg / wa.dev** is the long-term target for distributing chonkle codecs — all codecs are Component Model components, which is exactly what the registry is designed for. Migration is deferred until the tooling matures further.
-
-**GitHub Packages** (npm, Maven, etc.) is not a good fit for this use case and can be ruled out.
+- CI must push to both Releases and GHCR on each tagged release
+- Consumers using OCI need `oras` or an OCI client library
+- When warg tooling matures, Component Model codecs can be additionally published to wa.dev; Core Wasm codecs will continue to use Releases or GHCR
+- Native codecs are out of scope here — they follow standard Python packaging
