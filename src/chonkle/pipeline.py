@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from chonkle.codecs._base import Codec, PortDescriptor, Signature
+    from chonkle.codecs._base import Codec
     from chonkle.resolver import Resolver
+    from chonkle.wasm_signature import PortDescriptor, Signature
 
 Direction = Literal["encode", "decode"]
 

@@ -11,9 +11,9 @@ from typing import Any, cast
 
 import wasmtime
 
-from chonkle.codecs._base import Codec, PortMap, Signature
+from chonkle.codecs._base import Backend, Codec, PortMap
 from chonkle.pipeline import Direction
-from chonkle.wasm_signature import read_signature
+from chonkle.wasm_signature import Signature
 
 type OutputPortMap = list[tuple[str, bytes | CoreWasmRef]]
 
@@ -68,7 +68,7 @@ class CoreWasmCodec(Codec):
     def __init__(self, engine: wasmtime.Engine, wasm_path: Path) -> None:
         self._engine = engine
         self._wasm_path = wasm_path
-        self._sig = Signature.from_dict(read_signature(wasm_path))
+        self._sig = Signature.from_wasm(wasm_path)
 
         module = wasmtime.Module.from_file(engine, str(wasm_path))
         self._store = wasmtime.Store(engine)
@@ -85,8 +85,8 @@ class CoreWasmCodec(Codec):
         self._decode_fn = _require_export(exports, "decode", wasmtime.Func, wasm_path)
 
     @property
-    def codec_type(self) -> str:
-        return "core"
+    def codec_type(self) -> Backend:
+        return Backend.CORE
 
     @property
     def codec_id(self) -> str:

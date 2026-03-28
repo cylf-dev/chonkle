@@ -6,11 +6,12 @@ from unittest.mock import patch
 
 import pytest
 
-from chonkle.codecs._base import Codec, PortMap, Signature
+from chonkle.codecs._base import Backend, Codec, PortMap
 from chonkle.codecs.native import NativeCodec
 from chonkle.executor import run
 from chonkle.pipeline import Direction, Pipeline, PreparedPipeline
 from chonkle.resolver import Resolver
+from chonkle.wasm_signature import Signature
 
 numcodecs = pytest.importorskip("numcodecs")
 np = pytest.importorskip("numpy")
@@ -122,6 +123,7 @@ class TestNativeCodecNdarrayFormat:
 
 _DEFAULT_SIG = Signature.from_dict(
     {
+        "codec_id": "fake",
         "inputs": {"bytes": {"type": "bytes"}},
         "outputs": {"bytes": {"type": "bytes"}},
     }
@@ -136,8 +138,8 @@ class _FakeCodec(Codec):
         self._sig = sig or _DEFAULT_SIG
 
     @property
-    def codec_type(self) -> str:
-        return "component"
+    def codec_type(self) -> Backend:
+        return Backend.COMPONENT
 
     @property
     def codec_id(self) -> str:
@@ -335,10 +337,9 @@ class TestResolverNativeIntegration:
         assert isinstance(codec, NativeCodec)
         assert codec.codec_type == "native"
 
-    def test_resolver_native_lower_priority_than_wasm(self) -> None:
-        """With default preference, wasm is preferred over native."""
+    def test_resolver_default_preference_selects_native(self) -> None:
+        """With default preference, native is preferred over wasm."""
         resolver = Resolver(codec_store=Path("/nonexistent"))
-        # No wasm available in nonexistent store, so native is fallback
         codec = resolver.resolve("zlib")
         assert isinstance(codec, NativeCodec)
 
@@ -355,11 +356,20 @@ class TestResolverNativeIntegration:
         """list_codecs() includes native codec entries."""
         resolver = Resolver(codec_store=Path("/nonexistent"))
         entries = resolver.list_codecs()
-        native_entries = [e for e in entries if e.codec_type == "native"]
+        native_entries = [e for e in entries if e.backend == "native"]
         assert len(native_entries) > 0
         codec_ids = {e.codec_id for e in native_entries}
         assert "zlib" in codec_ids
         assert "gzip" in codec_ids
+
+    def test_preference_mismatch_raises(self) -> None:
+        """Preference list that excludes available backends raises ValueError."""
+        resolver = Resolver(
+            codec_store=Path("/nonexistent"),
+            preference=["component"],
+        )
+        with pytest.raises(ValueError, match=r"No implementation.*matches preference"):
+            resolver.resolve("zlib")
 
     def test_resolver_unknown_native_raises(self) -> None:
         """Resolver raises for unknown codec with no wasm and no native."""

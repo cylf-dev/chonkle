@@ -6,12 +6,12 @@ from typing import Any
 
 import pytest
 
-from chonkle.codecs._base import Codec, PortMap, Signature
+from chonkle.codecs._base import Backend, Codec, PortMap
 from chonkle.codecs.core import CoreWasmCodec, CoreWasmRef
 from chonkle.executor import run
 from chonkle.pipeline import Direction, Pipeline, PreparedPipeline, prepare
-from chonkle.resolver import Resolver
-from chonkle.wasm_signature import embed_signature
+from chonkle.resolver import CodecStore, Resolver
+from chonkle.wasm_signature import Signature, embed_signature
 
 _REPO_ROOT = Path(__file__).parent.parent
 _CODEC_DIR = _REPO_ROOT / "codec"
@@ -22,7 +22,8 @@ _CM_HEADER = b"\x00asm\x0d\x00\x01\x00"
 
 def _wasm_with_signature(signature: dict) -> bytes:
     """Return minimal .wasm bytes with an embedded chonkle:signature section."""
-    return embed_signature(_CM_HEADER, signature)
+    sig = {"codec_id": "test-codec", **signature}
+    return embed_signature(_CM_HEADER, sig)
 
 
 # ---------- Fake codec for wiring tests ----------
@@ -30,6 +31,7 @@ def _wasm_with_signature(signature: dict) -> bytes:
 
 _DEFAULT_SIG = Signature.from_dict(
     {
+        "codec_id": "fake",
         "inputs": {"bytes": {"type": "bytes"}},
         "outputs": {"bytes": {"type": "bytes"}},
     }
@@ -48,8 +50,8 @@ class _FakeCodec(Codec):
         self._sig = sig or _DEFAULT_SIG
 
     @property
-    def codec_type(self) -> str:
-        return "component"
+    def codec_type(self) -> Backend:
+        return Backend.COMPONENT
 
     @property
     def codec_id(self) -> str:
@@ -154,6 +156,7 @@ def _make_decode_pipeline() -> dict:
 # Signature with level marked as encode_only.
 _SIG_WITH_ENCODE_ONLY = Signature.from_dict(
     {
+        "codec_id": "fake",
         "inputs": {
             "bytes": {"type": "bytes"},
             "level": {"type": "int", "encode_only": True},
@@ -283,6 +286,7 @@ class TestRunWiring:
 
         sig = Signature.from_dict(
             {
+                "codec_id": "fake",
                 "inputs": {
                     "bytes": {"type": "bytes"},
                     "sym_table": {"type": "string", "encode_only": True},
@@ -324,6 +328,7 @@ class TestRunWiring:
 
         sig = Signature.from_dict(
             {
+                "codec_id": "fake",
                 "inputs": {
                     "bytes": {"type": "bytes"},
                     "sym_table": {"type": "string", "encode_only": True},
@@ -425,6 +430,7 @@ class TestRunWiring:
 
         split_sig = Signature.from_dict(
             {
+                "codec_id": "fake-split",
                 "inputs": {"bytes": {"type": "bytes"}},
                 "outputs": {"a": {"type": "bytes"}, "b": {"type": "bytes"}},
             }
@@ -448,6 +454,7 @@ class TestResolverIntegration:
         """The resolver maps codec_id to a wasm file."""
         wasm_file = tmp_path / "codec.wasm"
         sig = {
+            "codec_id": "some-codec",
             "inputs": {"bytes": {"type": "bytes", "required": True}},
             "outputs": {"bytes": {"type": "bytes"}},
         }
@@ -490,6 +497,101 @@ class TestResolverIntegration:
         resolver = Resolver(codec_store=Path("/nonexistent"))
         with pytest.raises(ValueError, match="No codec implementation found"):
             prepare(data, "encode", resolver=resolver)
+
+
+class TestForceSourceResolution:
+    """Verify force_sources bypasses the store and overwrites on install."""
+
+    def _make_wasm(self, codec_id: str, impl: str = "impl-a") -> bytes:
+        return _wasm_with_signature(
+            {
+                "codec_id": codec_id,
+                "implementation": impl,
+                "inputs": {"bytes": {"type": "bytes"}},
+                "outputs": {"bytes": {"type": "bytes"}},
+            }
+        )
+
+    def test_force_install_overwrites_store_entry(self, tmp_path: Path) -> None:
+        """force_install=True causes install() to overwrite an existing file."""
+        store = CodecStore(tmp_path)
+
+        wasm_v1 = tmp_path / "v1.wasm"
+        wasm_v1.write_bytes(self._make_wasm("fc", "same-impl"))
+        entry1 = store.install(wasm_v1)
+        mtime_after_v1 = entry1.location.stat().st_mtime
+
+        # Build a distinct v2 binary (different implementation tag to get
+        # different bytes, but re-use the same implementation *name* so
+        # install targets the same store path).
+        wasm_v2 = tmp_path / "v2.wasm"
+        v2_bytes = self._make_wasm("fc", "same-impl")
+        wasm_v2.write_bytes(v2_bytes)
+
+        # Without force_install, existing file is kept (mtime unchanged)
+        store.install(wasm_v2)
+        assert entry1.location.stat().st_mtime == mtime_after_v1
+
+        # With force_install, file is overwritten
+        entry2 = store.install(wasm_v2, force_install=True)
+        assert entry2.location == entry1.location
+        assert entry2.location.stat().st_mtime >= mtime_after_v1
+
+    def test_force_source_bypasses_store(self, tmp_path: Path) -> None:
+        """force_sources is consulted before the local store."""
+        store_dir = tmp_path / "store"
+        store_dir.mkdir()
+
+        # Pre-populate store with impl-a
+        store_codec_dir = store_dir / "fc"
+        store_codec_dir.mkdir()
+        (store_codec_dir / "impl-a.wasm").write_bytes(self._make_wasm("fc", "impl-a"))
+
+        # Put a different impl in a file:// source
+        source_wasm = tmp_path / "source.wasm"
+        source_wasm.write_bytes(self._make_wasm("fc", "impl-b"))
+
+        resolver = Resolver(
+            codec_store=store_dir,
+            force_sources={"fc": f"file://{source_wasm}"},
+        )
+
+        # Before resolve, only impl-a is in the store
+        assert "impl-b" not in CodecStore(store_dir).get_index().get("fc", {})
+
+        codec = resolver.resolve("fc")
+        assert codec.signature().implementation == "impl-b"
+
+        # After resolve, impl-b is installed in the store
+        assert "impl-b" in CodecStore(store_dir).get_index().get("fc", {})
+
+    def test_explicit_path_takes_priority_over_force_source(
+        self, tmp_path: Path
+    ) -> None:
+        """paths (step 0) beats force_sources (step 1)."""
+        wasm_file = tmp_path / "local.wasm"
+        wasm_file.write_bytes(self._make_wasm("fc", "local-impl"))
+
+        resolver = Resolver(
+            codec_store=Path("/nonexistent"),
+            paths={"fc": wasm_file},
+            # If force_sources were consulted, this would try to download
+            # from a non-existent URL and fail.
+            force_sources={"fc": "https://should-not-be-called.example.com/x.wasm"},
+        )
+        codec = resolver.resolve("fc")
+        assert codec.signature().implementation == "local-impl"
+
+    def test_force_source_only_affects_specified_codec(self, tmp_path: Path) -> None:
+        """Codecs not in force_sources resolve normally."""
+        from chonkle.codecs.native import NativeCodec
+
+        resolver = Resolver(
+            codec_store=Path("/nonexistent"),
+            force_sources={"other-codec": "file:///doesnt-matter.wasm"},
+        )
+        codec = resolver.resolve("zlib")
+        assert isinstance(codec, NativeCodec)
 
 
 class TestSignatureValidation:
@@ -1077,6 +1179,7 @@ class TestInvertedExecution:
 
         split_sig = Signature.from_dict(
             {
+                "codec_id": "fake-split",
                 "inputs": {"bytes": {"type": "bytes"}},
                 "outputs": {
                     "rep_levels": {"type": "bytes"},
@@ -1133,6 +1236,7 @@ class TestInvertedExecution:
 
         sig = Signature.from_dict(
             {
+                "codec_id": "fake",
                 "inputs": {
                     "bytes": {"type": "bytes"},
                     "level": {"type": "int", "encode_only": True},

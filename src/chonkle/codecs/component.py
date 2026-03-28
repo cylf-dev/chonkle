@@ -8,9 +8,9 @@ from typing import Any
 import wasmtime
 import wasmtime.component
 
-from chonkle.codecs._base import CODEC_TRANSFORM_IFACE, Codec, PortMap, Signature
+from chonkle.codecs._base import CODEC_TRANSFORM_IFACE, Backend, Codec, PortMap
 from chonkle.pipeline import Direction
-from chonkle.wasm_signature import read_signature
+from chonkle.wasm_signature import Signature
 
 
 class ComponentCodec(Codec):
@@ -24,12 +24,12 @@ class ComponentCodec(Codec):
     def __init__(self, engine: wasmtime.Engine, wasm_path: Path) -> None:
         self._engine = engine
         self._wasm_path = wasm_path
-        self._sig = Signature.from_dict(read_signature(wasm_path))
+        self._sig = Signature.from_wasm(wasm_path)
         self._component = wasmtime.component.Component.from_file(engine, str(wasm_path))
 
     @property
-    def codec_type(self) -> str:
-        return "component"
+    def codec_type(self) -> Backend:
+        return Backend.COMPONENT
 
     @property
     def codec_id(self) -> str:

@@ -8,7 +8,7 @@ from typing import Any
 
 from chonkle.executor import run
 from chonkle.pipeline import Direction, prepare
-from chonkle.resolver import Resolver
+from chonkle.resolver import CodecInfo, Resolver
 from chonkle.wasm_signature import embed_signature
 
 
@@ -75,6 +75,17 @@ def main() -> None:
         dest="overrides",
         help="Override codec implementation: --override zlib=zlib-rs (repeatable).",
     )
+    run_parser.add_argument(
+        "--source",
+        metavar="ID=URI",
+        action="append",
+        default=[],
+        dest="sources",
+        help=(
+            "Force-resolve a codec from a URI, bypassing the local store: "
+            "--source zlib=https://example.com/zlib.wasm (repeatable)."
+        ),
+    )
 
     # --- codecs command ---
     codecs_parser = subparsers.add_parser(
@@ -133,10 +144,19 @@ def _build_resolver(
         codec_id, impl = spec.split("=", 1)
         overrides[codec_id] = impl
 
+    force_sources: dict[str, str] = {}
+    for spec in args.sources:
+        if "=" not in spec:
+            sys.stderr.write(f"--source must be ID=URI, got {spec!r}\n")
+            sys.exit(1)
+        codec_id, uri = spec.split("=", 1)
+        force_sources[codec_id] = uri
+
     return Resolver(
         codec_store=args.codec_store,
         preference=preference,
         overrides=overrides,
+        force_sources=force_sources,
         pipeline_sources=pipeline_sources,
     )
 
@@ -181,6 +201,22 @@ def _run_command(args: argparse.Namespace) -> None:
             sys.stdout.write(f"Output {port_name!r}: {len(data)} bytes\n")
 
 
+def _print_table(cols: tuple[str, ...], rows: list[CodecInfo]) -> None:
+    """Print a simple aligned table with header and separator."""
+
+    def _cell(entry: CodecInfo, col: str) -> str:
+        return str(getattr(entry, col) or "(unnamed)")
+
+    widths = {c: max(len(c), max(len(_cell(r, c)) for r in rows)) for c in cols}
+    sep = "  "
+    header = sep.join(f"{c:<{widths[c]}s}" for c in cols)
+    rule = sep.join("─" * widths[c] for c in cols)
+    sys.stdout.write(f"{header}\n{rule}\n")
+    for row in rows:
+        line = sep.join(f"{_cell(row, c):<{widths[c]}s}" for c in cols)
+        sys.stdout.write(f"{line}\n")
+
+
 def _codecs_command(args: argparse.Namespace) -> None:
     """List installed codec implementations."""
     resolver = Resolver(codec_store=args.codec_store)
@@ -197,23 +233,10 @@ def _codecs_command(args: argparse.Namespace) -> None:
         return
 
     if args.codec_id:
-        sys.stdout.write(f"codec_id: {args.codec_id}\nimplementations:\n")
-        for entry in entries:
-            sys.stdout.write(
-                f"  {entry.implementation or '(unnamed)':<20s}"
-                f" {entry.codec_type:<12s}"
-                f" {entry.path}\n"
-            )
+        cols = ("implementation", "backend", "location")
     else:
-        sys.stdout.write(
-            f"{'codec_id':<24s} {'implementation':<20s} {'backend':<12s}\n"
-        )
-        for entry in entries:
-            sys.stdout.write(
-                f"{entry.codec_id:<24s} "
-                f"{entry.implementation or '(unnamed)':<20s} "
-                f"{entry.codec_type:<12s}\n"
-            )
+        cols = ("codec_id", "implementation", "backend")
+    _print_table(cols, entries)
 
 
 def _embed_signature_command(args: argparse.Namespace) -> None:

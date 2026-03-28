@@ -1,49 +1,93 @@
 """Codec resolution: maps codec_ids to Codec instances.
 
 The Resolver handles finding, downloading, and instantiating codec
-implementations for a pipeline. It replaces direct URI resolution with
-a local codec store indexed by codec_id and content hash.
+implementations for a pipeline. It maintains a local codec store
+indexed by codec_id and implementation name. Set
+``CHONKLE_FORCE_INSTALL=1`` to overwrite an existing store entry when
+re-installing a codec from a source URI.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
+import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import wasmtime
 
-from chonkle.codecs._base import SIGNATURES_DIR, Codec, detect_codec_type
+from chonkle.codecs._base import SIGNATURES_DIR, Backend, Codec
 from chonkle.codecs.component import ComponentCodec
 from chonkle.codecs.core import CoreWasmCodec
 from chonkle.codecs.native import NativeCodec
-from chonkle.wasm_signature import read_signature
+from chonkle.wasm_signature import Signature, detect_codec_type
 
 
 def _default_store_path() -> Path:
-    """Return the default local codec store path.
-
-    Uses ``CHONKLE_CODEC_STORE`` if set, otherwise ``~/.chonkle/codecs``.
-    """
+    """Return the default local codec store path."""
     override = os.environ.get("CHONKLE_CODEC_STORE", "")
     if override:
         return Path(override)
     return Path.home() / ".chonkle" / "codecs"
 
 
-@dataclass
-class CodecEntry:
-    """Metadata about a codec implementation in the local store."""
+@dataclass(frozen=True)
+class CodecInfo:
+    """Metadata about a codec implementation."""
 
-    path: Path
     codec_id: str
     implementation: str
-    codec_type: str  # "component" or "core"
+    backend: Backend
+    location: Path  # .wasm for wasm entries, .json for native
+
+
+class CodecStore:
+    """Local codec store: scan, install, and list wasm codec entries."""
+
+    def __init__(self, store_path: Path) -> None:
+        self._store_path = store_path
+        self._index: dict[str, dict[str, CodecInfo]] | None = None
+
+    @property
+    def path(self) -> Path:
+        return self._store_path
+
+    def get_index(self) -> dict[str, dict[str, CodecInfo]]:
+        """Return the codec index, scanning the store on first access."""
+        if self._index is None:
+            self._index = _scan_store(self._store_path)
+        return self._index
+
+    def install(self, wasm_path: Path, *, force_install: bool = False) -> CodecInfo:
+        """Install a wasm file into the store and return its entry."""
+        sig = Signature.from_wasm(wasm_path)
+        backend = detect_codec_type(wasm_path)
+
+        impl_name = _sanitize_filename(sig.implementation or wasm_path.stem)
+        dest_dir = self._store_path / sig.codec_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{impl_name}.wasm"
+
+        if not dest.exists() or force_install or _should_force_install():
+            shutil.copy2(wasm_path, dest)
+
+        entry = CodecInfo(
+            codec_id=sig.codec_id,
+            implementation=sig.implementation,
+            backend=backend,
+            location=dest,
+        )
+        self._index = None  # invalidate so next access re-scans
+        return entry
+
+    def list_entries(self) -> list[CodecInfo]:
+        """Return all wasm entries in the store."""
+        result: list[CodecInfo] = []
+        for entries in self.get_index().values():
+            result.extend(entries.values())
+        return result
 
 
 class Resolver:
@@ -52,9 +96,10 @@ class Resolver:
     Resolution order:
 
     1. Explicit paths (if provided via ``paths``)
-    2. Per-codec overrides (specific implementation name)
-    3. Local store (selected by backend preference)
-    4. Pipeline sources (download and install)
+    2. Force sources (download from URI regardless of store)
+    3. Per-codec overrides (specific implementation name)
+    4. Local store (selected by backend preference)
+    5. Pipeline sources (download and install)
 
     Args:
         codec_store: Path to the local codec store directory.
@@ -65,10 +110,18 @@ class Resolver:
             Supported values: ``"core"``, ``"component"``, ``"native"``.
         overrides: Maps codec_id to a specific implementation name,
             bypassing the preference system.
+        force_sources: Maps codec_id to a download URI. Unlike
+            ``pipeline_sources``, these are fetched unconditionally,
+            bypassing the local store. The fetched binary is
+            installed into the store (overwriting any existing
+            entry with the same implementation name).
         pipeline_sources: Maps codec_id to a download URI (from the
             pipeline's ``sources`` field).
         paths: Maps codec_id to a specific ``.wasm`` file path.
             Useful for testing and ``--codec-path`` CLI usage.
+        engine: Shared Wasmtime engine for codec instantiation.
+            If not provided, a new engine with compilation caching
+            is created.
     """
 
     def __init__(
@@ -77,28 +130,30 @@ class Resolver:
         codec_store: Path | None = None,
         preference: Sequence[str] | None = None,
         overrides: dict[str, str] | None = None,
+        force_sources: dict[str, str] | None = None,
         pipeline_sources: dict[str, str] | None = None,
         paths: dict[str, Path] | None = None,
+        engine: wasmtime.Engine | None = None,
     ) -> None:
-        self._store_path = codec_store or _default_store_path()
-        self._preference = list(preference or ("core", "component", "native"))
+        self._store = CodecStore(codec_store or _default_store_path())
+        self._preference = list(
+            preference or (Backend.NATIVE, Backend.CORE, Backend.COMPONENT)
+        )
         self._overrides = dict(overrides or {})
+        self._force_sources = dict(force_sources or {})
         self._pipeline_sources = dict(pipeline_sources or {})
         self._paths = dict(paths or {})
-        config = wasmtime.Config()
-        config.cache = True
-        self._engine = wasmtime.Engine(config)
-        self._index: dict[str, list[CodecEntry]] | None = None
-
-    @property
-    def engine(self) -> wasmtime.Engine:
-        """The shared Wasmtime engine used for all codec instantiation."""
-        return self._engine
+        if engine is not None:
+            self._engine = engine
+        else:
+            config = wasmtime.Config()
+            config.cache = True
+            self._engine = wasmtime.Engine(config)
 
     @property
     def store_path(self) -> Path:
         """Path to the local codec store directory."""
-        return self._store_path
+        return self._store.path
 
     def resolve(self, codec_id: str) -> Codec:
         """Resolve a codec_id to a Codec instance.
@@ -115,58 +170,41 @@ class Resolver:
         """
         # 0. Explicit paths (testing, CLI --codec-path)
         if codec_id in self._paths:
-            return self._instantiate_path(self._paths[codec_id])
+            return self._instantiate(self._paths[codec_id])
 
-        # 1. Per-codec override
+        # 1. Force sources (download from URI regardless of store)
+        if codec_id in self._force_sources:
+            return self._resolve_from_source(
+                self._force_sources[codec_id], force_install=True
+            )
+
+        # 2. Per-codec override
         if codec_id in self._overrides:
             return self._resolve_override(codec_id, self._overrides[codec_id])
 
-        # 2. Local store + native: collect candidates and pick by preference
-        entries = self._get_index().get(codec_id, [])
+        # 3. Local store + native: collect candidates and pick by preference
+        entries = self._store.get_index().get(codec_id, {})
         has_native = _has_native_signature(codec_id)
         if entries or has_native:
             return self._resolve_by_preference(codec_id, entries, has_native)
 
-        # 3. Pipeline sources
+        # 4. Pipeline sources
         if codec_id in self._pipeline_sources:
-            return self._resolve_from_source(codec_id, self._pipeline_sources[codec_id])
+            return self._resolve_from_source(self._pipeline_sources[codec_id])
 
-        # Not found
-        tried = [f"local store ({self._store_path})", "native (numcodecs)"]
-        msg = (
-            f"No codec implementation found for {codec_id!r}. "
-            f"Checked: {', '.join(tried)}"
-        )
+        msg = f"No codec implementation found for {codec_id!r}"
         raise ValueError(msg)
 
-    def list_codecs(self) -> list[CodecEntry]:
+    def list_codecs(self) -> list[CodecInfo]:
         """List all codec implementations (local store and native)."""
-        result: list[CodecEntry] = []
-        for entries in self._get_index().values():
-            result.extend(entries)
-        if SIGNATURES_DIR.exists():
-            for sig_file in sorted(SIGNATURES_DIR.glob("*.json")):
-                sig = json.loads(sig_file.read_text())
-                cid = sig.get("codec_id", sig_file.stem)
-                result.append(
-                    CodecEntry(
-                        path=sig_file,
-                        codec_id=cid,
-                        implementation=sig.get("implementation", f"numcodecs.{cid}"),
-                        codec_type="native",
-                    )
-                )
+        result = list(self._store.list_entries())
+        result.extend(_list_native_codecs())
         return result
-
-    def _get_index(self) -> dict[str, list[CodecEntry]]:
-        if self._index is None:
-            self._index = _scan_store(self._store_path)
-        return self._index
 
     def _resolve_by_preference(
         self,
         codec_id: str,
-        entries: list[CodecEntry],
+        entries: dict[str, CodecInfo],
         has_native: bool,
     ) -> Codec:
         """Select the best implementation for *codec_id* using the preference list.
@@ -175,77 +213,63 @@ class Resolver:
         (numcodecs) backend if a signature file exists.
         """
         for pref in self._preference:
-            if pref == "native" and has_native:
+            if pref == Backend.NATIVE and has_native:
                 return NativeCodec(codec_id)
-            for entry in entries:
-                if entry.codec_type == pref:
-                    return self._instantiate(entry)
-        # Fallback: first wasm entry if available, otherwise native
-        if entries:
-            return self._instantiate(entries[0])
-        return NativeCodec(codec_id)
+            for entry in entries.values():
+                if entry.backend == pref:
+                    return self._instantiate(entry.location)
+        available = [e.backend for e in entries.values()]
+        if has_native:
+            available.append(Backend.NATIVE)
+        msg = (
+            f"No implementation for {codec_id!r} matches preference "
+            f"{self._preference}. Available backends: {available}"
+        )
+        raise ValueError(msg)
 
     def _resolve_override(self, codec_id: str, impl_name: str) -> Codec:
-        entries = self._get_index().get(codec_id, [])
-        for entry in entries:
-            if entry.implementation == impl_name:
-                return self._instantiate(entry)
+        entries = self._store.get_index().get(codec_id, {})
+        if impl_name in entries:
+            return self._instantiate(entries[impl_name].location)
         # Check native
-        available = [e.implementation for e in entries]
+        available = list(entries)
         sig_path = SIGNATURES_DIR / f"{codec_id}.json"
         if sig_path.exists():
-            native_impl = json.loads(sig_path.read_text()).get(
-                "implementation", f"numcodecs.{codec_id}"
-            )
-            if native_impl == impl_name:
+            sig = Signature.from_json(sig_path)
+            if sig.implementation == impl_name:
                 return NativeCodec(codec_id)
-            available.append(native_impl)
+            available.append(sig.implementation)
         msg = (
             f"Override implementation {impl_name!r} for codec {codec_id!r} "
             f"not found. Available: {available}"
         )
         raise ValueError(msg)
 
-    def _instantiate_path(self, wasm_path: Path) -> Codec:
-        """Create a Codec from an explicit wasm path."""
+    def _instantiate(self, wasm_path: Path) -> Codec:
+        """Create a Codec from a wasm path."""
         codec_type = detect_codec_type(wasm_path)
-        if codec_type == "component":
+        if codec_type == Backend.COMPONENT:
             return ComponentCodec(self._engine, wasm_path)
         return CoreWasmCodec(self._engine, wasm_path)
 
-    def _instantiate(self, entry: CodecEntry) -> Codec:
-        if entry.codec_type == "component":
-            return ComponentCodec(self._engine, entry.path)
-        return CoreWasmCodec(self._engine, entry.path)
-
-    def _resolve_from_source(self, codec_id: str, uri: str) -> Codec:
+    def _resolve_from_source(self, uri: str, *, force_install: bool = False) -> Codec:
         from chonkle.wasm_download import resolve_uri
 
-        wasm_path = resolve_uri(uri)
-        return self._install_and_instantiate(wasm_path)
+        with resolve_uri(uri) as wasm_path:
+            entry = self._store.install(wasm_path, force_install=force_install)
+            return self._instantiate(entry.location)
 
-    def _install_and_instantiate(self, wasm_path: Path) -> Codec:
-        """Install a downloaded wasm file into the store and instantiate."""
-        sig = read_signature(wasm_path)
-        codec_id = sig.get("codec_id", wasm_path.stem)
-        codec_type = detect_codec_type(wasm_path)
 
-        content_hash = hashlib.sha256(wasm_path.read_bytes()).hexdigest()[:16]
-        dest_dir = self._store_path / codec_id
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / f"{content_hash}.wasm"
+def _should_force_install() -> bool:
+    return os.environ.get("CHONKLE_FORCE_INSTALL", "") == "1"
 
-        if not dest.exists():
-            shutil.copy2(wasm_path, dest)
 
-        entry = CodecEntry(
-            path=dest,
-            codec_id=codec_id,
-            implementation=sig.get("implementation", ""),
-            codec_type=codec_type,
-        )
-        self._get_index().setdefault(codec_id, []).append(entry)
-        return self._instantiate(entry)
+_UNSAFE_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
+
+
+def _sanitize_filename(name: str) -> str:
+    """Replace filesystem-unsafe characters in *name* with underscores."""
+    return _UNSAFE_CHARS.sub("_", name)
 
 
 def _has_native_signature(codec_id: str) -> bool:
@@ -253,9 +277,27 @@ def _has_native_signature(codec_id: str) -> bool:
     return (SIGNATURES_DIR / f"{codec_id}.json").exists()
 
 
-def _scan_store(store_path: Path) -> dict[str, list[CodecEntry]]:
+def _list_native_codecs() -> list[CodecInfo]:
+    """Return CodecInfo for all native codecs with bundled signatures."""
+    if not SIGNATURES_DIR.exists():
+        return []
+    result: list[CodecInfo] = []
+    for sig_file in sorted(SIGNATURES_DIR.glob("*.json")):
+        sig = Signature.from_json(sig_file)
+        result.append(
+            CodecInfo(
+                codec_id=sig.codec_id,
+                implementation=sig.implementation,
+                backend=Backend.NATIVE,
+                location=sig_file,
+            )
+        )
+    return result
+
+
+def _scan_store(store_path: Path) -> dict[str, dict[str, CodecInfo]]:
     """Scan the local codec store and return entries indexed by codec_id."""
-    index: dict[str, list[CodecEntry]] = {}
+    index: dict[str, dict[str, CodecInfo]] = {}
     if not store_path.exists():
         return index
     for codec_dir in sorted(store_path.iterdir()):
@@ -263,15 +305,15 @@ def _scan_store(store_path: Path) -> dict[str, list[CodecEntry]]:
             continue
         for wasm_file in sorted(codec_dir.glob("*.wasm")):
             try:
-                sig: dict[str, Any] = read_signature(wasm_file)
-                codec_type = detect_codec_type(wasm_file)
+                sig = Signature.from_wasm(wasm_file)
+                backend = detect_codec_type(wasm_file)
             except (ValueError, OSError):
                 continue
-            entry = CodecEntry(
-                path=wasm_file,
-                codec_id=sig.get("codec_id", codec_dir.name),
-                implementation=sig.get("implementation", ""),
-                codec_type=codec_type,
+            entry = CodecInfo(
+                codec_id=sig.codec_id,
+                implementation=sig.implementation,
+                backend=backend,
+                location=wasm_file,
             )
-            index.setdefault(entry.codec_id, []).append(entry)
+            index.setdefault(entry.codec_id, {})[entry.implementation] = entry
     return index

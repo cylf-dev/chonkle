@@ -1,4 +1,4 @@
-"""Read and write ``chonkle:signature`` custom sections in Wasm binaries.
+"""Codec signatures: types, detection, and Wasm custom-section I/O.
 
 Pure-Python implementation — no wasmtime or instantiation needed.  Works with
 both core Wasm (version ``01 00 00 00``) and Component Model (version
@@ -8,14 +8,91 @@ both core Wasm (version ``01 00 00 00``) and Component Model (version
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from chonkle.codecs._base import Backend
+
 SECTION_NAME = "chonkle:signature"
 
-# Wasm magic number: ``\0asm``
+# Wasm binary header constants.
 _WASM_MAGIC = b"\x00asm"
 _HEADER_SIZE = 8  # magic (4) + version (4)
+_CORE_WASM_VERSION = b"\x01\x00\x00\x00"
+_COMPONENT_VERSION = b"\x0d\x00\x01\x00"
+
+
+@dataclass(frozen=True)
+class PortDescriptor:
+    """Descriptor for a single input or output port in a codec signature."""
+
+    type: str
+    required: bool = True
+    default: Any = None
+    encode_only: bool = False
+
+
+@dataclass(frozen=True)
+class Signature:
+    """Structured codec signature.
+
+    Replaces the raw ``dict[str, Any]`` signature format with typed fields.
+    """
+
+    codec_id: str
+    implementation: str
+    inputs: dict[str, PortDescriptor] = field(default_factory=dict)
+    outputs: dict[str, PortDescriptor] = field(default_factory=dict)
+    data_format: str | None = None  # "bytes" or "ndarray", native codecs only
+
+    @classmethod
+    def from_wasm(cls, wasm_path: str | Path) -> Signature:
+        """Construct a Signature from a ``.wasm`` file's embedded custom section."""
+        return cls.from_dict(read_signature(wasm_path))
+
+    @classmethod
+    def from_json(cls, json_path: str | Path) -> Signature:
+        """Construct a Signature from a JSON signature file."""
+        return cls.from_dict(json.loads(Path(json_path).read_text()))
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Signature:
+        """Construct a Signature from a raw JSON-derived dict."""
+        inputs: dict[str, PortDescriptor] = {}
+        for name, desc in d.get("inputs", {}).items():
+            inputs[name] = PortDescriptor(
+                type=desc.get("type", ""),
+                required=desc.get("required", True),
+                default=desc.get("default"),
+                encode_only=desc.get("encode_only", False),
+            )
+        outputs: dict[str, PortDescriptor] = {}
+        for name, desc in d.get("outputs", {}).items():
+            outputs[name] = PortDescriptor(
+                type=desc.get("type", ""),
+                required=desc.get("required", True),
+                default=desc.get("default"),
+            )
+        codec_id = d.get("codec_id")
+        if not codec_id:
+            msg = "Signature missing required field 'codec_id'"
+            raise ValueError(msg)
+        return cls(
+            codec_id=codec_id,
+            implementation=d.get("implementation", ""),
+            inputs=inputs,
+            outputs=outputs,
+            data_format=d.get("data_format"),
+        )
+
+    def encode_only_inputs(self) -> set[str]:
+        """Port names where encode_only is True."""
+        return {n for n, p in self.inputs.items() if p.encode_only}
+
+    def output_types(self) -> dict[str, str]:
+        """Map of output port name to type string."""
+        return {n: p.type for n, p in self.outputs.items()}
 
 
 def _read_leb128(data: bytes, offset: int) -> tuple[int, int]:
@@ -165,3 +242,37 @@ def _build_custom_section(name: str, payload: bytes) -> bytes:
     name_field = _encode_leb128(len(name_bytes)) + name_bytes
     section_body = name_field + payload
     return b"\x00" + _encode_leb128(len(section_body)) + section_body
+
+
+def detect_codec_type(wasm_path: Path) -> Backend:
+    """Detect whether a ``.wasm`` file is core or component model.
+
+    Reads the 8-byte header (magic + version) to distinguish:
+
+    - ``0d 00 01 00`` → ``"component"`` (Component Model)
+    - ``01 00 00 00`` → ``"core"`` (Core Wasm)
+
+    Args:
+        wasm_path: Path to the ``.wasm`` binary.
+
+    Returns:
+        ``"component"`` or ``"core"``.
+
+    Raises:
+        ValueError: Not a valid Wasm binary or unrecognized version.
+    """
+    with Path(wasm_path).open("rb") as f:
+        header = f.read(8)
+
+    if len(header) < 8 or header[:4] != _WASM_MAGIC:
+        msg = f"Not a valid Wasm binary: {wasm_path}"
+        raise ValueError(msg)
+
+    version = header[4:8]
+    if version == _COMPONENT_VERSION:
+        return Backend.COMPONENT
+    if version == _CORE_WASM_VERSION:
+        return Backend.CORE
+
+    msg = f"Unknown Wasm version {version.hex()}: {wasm_path}"
+    raise ValueError(msg)

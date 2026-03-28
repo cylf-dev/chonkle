@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
-from chonkle.codecs._base import SIGNATURES_DIR, Codec, PortMap, Signature
+from chonkle.codecs._base import SIGNATURES_DIR, Backend, Codec, PortMap
 from chonkle.pipeline import Direction
+from chonkle.wasm_signature import Signature
 
 
-def _load_native_signature(codec_id: str) -> dict[str, Any]:
-    """Load a native codec signature from the bundled JSON files.
+def _native_signature_path(codec_id: str) -> Path:
+    """Return the path to a native codec's bundled signature JSON file.
 
     Raises:
         ValueError: No signature file exists for *codec_id*.
@@ -19,7 +21,7 @@ def _load_native_signature(codec_id: str) -> dict[str, Any]:
     if not sig_path.exists():
         msg = f"No native codec signature for {codec_id!r} (looked in {SIGNATURES_DIR})"
         raise ValueError(msg)
-    return json.loads(sig_path.read_text())
+    return sig_path
 
 
 class NativeCodec(Codec):
@@ -44,14 +46,13 @@ class NativeCodec(Codec):
     """
 
     def __init__(self, codec_id: str) -> None:
-        raw_sig = _load_native_signature(codec_id)
-        self._sig = Signature.from_dict(raw_sig)
+        self._sig = Signature.from_json(_native_signature_path(codec_id))
         self._data_format: str = self._sig.data_format or "bytes"
         self._numcodecs = _import_numcodecs()
 
     @property
-    def codec_type(self) -> str:
-        return "native"
+    def codec_type(self) -> Backend:
+        return Backend.NATIVE
 
     @property
     def codec_id(self) -> str:
