@@ -2,9 +2,9 @@
 
 These documents specify the interface contracts between chonkle (the host) and codec implementations. Three codec backends are supported:
 
-- [Core Wasm](core.md)
-- [Component Model Wasm](component-model.md)
-- [Native (numcodecs)](native.md)
+- [Core Wasm](CORE.md)
+- [Component Model Wasm](COMPONENT_MODEL.md)
+- [Native (numcodecs)](NATIVE.md)
 
 All three are wrapped by the `Codec` ABC and present a uniform interface to the executor: `call(direction, port_map)` and `signature()`.
 
@@ -38,7 +38,7 @@ Fields:
 - `implementation` — identifies the specific build or project that produced the codec (e.g. `"zlib-rs"`, `"numcodecs.zlib"`)
 - `inputs` — map of input port descriptors. Each has `type` (required), and optional `required` (default `true`), `default`, and `encode_only` (default `false`).
 - `outputs` — map of output port descriptors. Each has `type`.
-- `data_format` (native codecs only) — `"bytes"` or `"ndarray"`, controls the calling convention. See [native.md](native.md).
+- `data_format` (native codecs only) — `"bytes"` or `"ndarray"`, controls the calling convention. See [NATIVE.md](NATIVE.md).
 
 ### Validation
 

@@ -264,7 +264,7 @@ intermediate stop, but the boundary count is the same:
 
 The only path to 1 copy per edge is direct composition (Pattern 1), which eliminates
 the intermediate component from the data path but requires static compile-time coupling
-between codecs. See [DATA_COPIES.md](../internals/DATA_COPIES.md) for full copy-count
+between codecs. See [DATA_COPIES.md](../design/DATA_COPIES.md) for full copy-count
 accounting.
 
 ## Current status in chonkle

@@ -602,4 +602,4 @@ and same buffer sizes.
 | Per-step copies after static composition (Component Model, fixed topology) | 2 total (all N steps) | DATA_COPIES.md |
 
 Full benchmark setup, methodology, and per-codec/per-size tables are in
-`docs/internals/CANONICAL_ABI_PERF.md` and `docs/internals/DATA_COPIES.md`.
+`docs/design/CANONICAL_ABI_PERF.md` and `docs/design/DATA_COPIES.md`.
