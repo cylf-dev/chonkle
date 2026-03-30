@@ -6,6 +6,12 @@ chonkle is a Python host for running data codec pipelines. Pipelines are DAGs of
 
 - [OVERVIEW.md](OVERVIEW.md) — Why Wasm, why Python, codec backends summary, and execution model
 
+## Guides
+
+Step-by-step guides for building codecs.
+
+- [guides/](guides/) — How to build each codec type: [Component Model (Rust)](guides/COMPONENT_MODEL_RUST.md), [Component Model (C)](guides/COMPONENT_MODEL_C.md), [Core Wasm](guides/CORE.md), [Native](guides/NATIVE.md)
+
 ## Reference
 
 Specs and reference material for codec and pipeline authors.

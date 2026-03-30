@@ -1,6 +1,6 @@
 # Native (numcodecs)
 
-Native codecs wrap [numcodecs](https://numcodecs.readthedocs.io/) codec objects — there is no `.wasm` binary. Using native codecs requires `numcodecs` and `numpy`: `pip install chonkle[native]`.
+Native codecs wrap [numcodecs](https://numcodecs.readthedocs.io/) codec objects. For a step-by-step guide, see [Adding a Native Codec](../../guides/NATIVE.md) — there is no `.wasm` binary. Using native codecs requires `numcodecs` and `numpy`: `pip install chonkle[native]`.
 
 ## Signature source
 

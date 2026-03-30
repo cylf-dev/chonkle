@@ -112,20 +112,4 @@ GitHub release to match the `wasmtime` Python package version.
 
 ## Adding a codec
 
-### Component Model codec
-
-1. Implement `encode` and `decode` for the `chonkle:codec/transform` WIT interface.
-2. Build to a Component Model `.wasm` and place it in `codec/<name>/`.
-3. Write a `signature.json` in the codec directory.
-4. Embed the signature: `chonkle embed-signature <name>.wasm signature.json`.
-5. Add a `.gitignore` for your toolchain's build artifacts.
-
-### Core Wasm codec
-
-1. Implement and export `memory`, `alloc`, `dealloc`, `encode`, and `decode` per the [core ABI spec](../docs/reference/codec-contract/core.md).
-2. Build to a core wasm32-wasi `.wasm` and place it in `codec/<name>/`.
-3. Write a `signature.json` in the codec directory.
-4. Embed the signature: `chonkle embed-signature <name>.wasm signature.json`.
-5. Add a `.gitignore` for your toolchain's build artifacts.
-
-See [docs/reference/codec-contract/](../docs/reference/codec-contract/) for the codec contract (common requirements and per-backend specs).
+See the [codec build guides](../docs/guides/) for step-by-step instructions covering each backend and toolchain.

@@ -6,6 +6,8 @@ These documents specify the interface contracts between chonkle (the host) and c
 - [Component Model Wasm](COMPONENT_MODEL.md)
 - [Native (numcodecs)](NATIVE.md)
 
+For step-by-step build guides, see [docs/guides/](../../guides/).
+
 All three are wrapped by the `Codec` ABC and present a uniform interface to the executor: `call(direction, port_map)` and `signature()`.
 
 ## Call interface

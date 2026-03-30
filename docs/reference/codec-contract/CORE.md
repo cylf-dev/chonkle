@@ -1,6 +1,6 @@
 # Core Wasm
 
-Core Wasm codecs are wasm32-wasi reactor modules. The host and module communicate through direct reads and writes to the module's linear memory, using a binary serialization format for port-maps.
+Core Wasm codecs are wasm32-wasi reactor modules. For a build guide, see [Building a Core Wasm Codec](../../guides/CORE.md). The host and module communicate through direct reads and writes to the module's linear memory, using a binary serialization format for port-maps.
 
 ## Required Exports
 

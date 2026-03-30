@@ -1,6 +1,6 @@
 # Component Model Wasm
 
-Component Model codecs implement the `chonkle:codec/transform@0.1.0` WIT interface. The toolchain (e.g. `cargo-component`, `wit-bindgen`, `wasm-tools component new`) generates all memory management and canonical ABI glue. Codec authors work only with high-level types.
+Component Model codecs implement the `chonkle:codec/transform@0.1.0` WIT interface. For build guides, see [Rust](../../guides/COMPONENT_MODEL_RUST.md) or [C](../../guides/COMPONENT_MODEL_C.md). The toolchain (e.g. `cargo-component`, `wit-bindgen`, `wasm-tools component new`) generates all memory management and canonical ABI glue. Codec authors work only with high-level types.
 
 ## WIT interface
 
