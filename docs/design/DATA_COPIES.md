@@ -50,10 +50,6 @@ The table below shows the number of copies per inter-step edge in the Python exe
 
 Copies involving the canonical ABI are the bottleneck. At ~1.7 MB/s, a single canonical ABI copy of 2 MB takes ~1.2 s. All other copies (materialize, `Memory.read`/`Memory.write`, `ctypes.memmove`) run at ~10 GB/s and are negligible in comparison.
 
-## Value Store
-
-The executor's `value_store` holds `bytes | CoreWasmRef`. Core Wasm codec outputs remain as `CoreWasmRef` (deferred references in linear memory) until consumed. Port-map builders materialize `CoreWasmRef` for non-core downstream codecs and pass them through for core downstream codecs. Final pipeline outputs are always materialized to `bytes`.
-
 ## Copy Reduction
 
 ### Single-copy transfer (implemented)
@@ -62,7 +58,9 @@ When both source and destination are core wasm modules, the executor uses `_sing
 
 ### Shared memory between core modules
 
-Each core wasm module has its own isolated linear memory. The Wasm multi-memory proposal allows a module to define more than one memory. In theory, two modules could each import the same shared memory alongside their private one, enabling zero-copy transfers through that shared region. In practice, C and Rust compilers (LLVM) can only emit code that targets a module's default memory — there is no way to compile code that reads from or writes to a second memory. Until toolchain support exists, shared memory between modules is not viable. See [../wasm/MULTI_MEMORY.md](../wasm/MULTI_MEMORY.md) for details.
+Each core wasm module has its own isolated linear memory. An earlier design used a single shared `wasmtime.Memory` for all modules, enabling zero-copy transfers. This was abandoned because every module's data segments target the same low addresses — when `linker.instantiate()` writes a module's data segments, it overwrites whatever a previous module left there. This prevents multiple module instances from coexisting simultaneously, which is required for single-copy transfer and eventual parallel execution of independent DAG branches.
+
+The Wasm multi-memory proposal (part of Wasm 3.0) could in theory solve this: each module keeps a private memory for data segments and heap, and all modules share a second memory for the data plane. In practice, C and Rust compilers (LLVM) can only emit load/store instructions targeting a module's default memory — there is no way to compile code that reads from or writes to a second memory. Library-wrapping codecs (zlib, zstd, etc.) would need to copy data between shared and private memory on every call, which is worse than the current design. See [../wasm/MULTI_MEMORY.md](../wasm/MULTI_MEMORY.md) for the full toolchain analysis.
 
 ### Pipeline composition
 
@@ -74,4 +72,4 @@ The [WASI roadmap](https://wasi.dev/roadmap) includes caller-supplied buffers, w
 
 ### Native Python extension for canonical ABI
 
-A Rust extension (PyO3 + wasmtime-rs) could replace the Python canonical ABI path with typed bindings that use `memory.write()` per buffer instead of per-byte Python iteration. This would bring Component Model copies to memcpy speed (~10 GB/s), making all Wasm-involving edges equivalent in cost to core module edges. See [CANONICAL_ABI_PERF.md](CANONICAL_ABI_PERF.md) for details.
+A Rust extension (PyO3 + wasmtime-rs) could replace the Python canonical ABI path with typed bindings that use `memory.write()` per buffer instead of per-byte Python iteration. This would bring Component Model copies to memcpy speed (~10 GB/s), making all Wasm-involving edges equivalent in cost to core module edges. This does not reduce the number of copies — Component Model edges would still be 2 copies — but it eliminates the Python overhead that makes those copies slow. See [CANONICAL_ABI_PERF.md](CANONICAL_ABI_PERF.md) for details.

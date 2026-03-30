@@ -8,7 +8,7 @@ chonkle is a Python host for running data codec pipelines. Pipelines are DAGs of
 
 ## Reference
 
-Specs for codec and pipeline authors.
+Specs and reference material for codec and pipeline authors.
 
 - [reference/codec-contract/](reference/codec-contract/) — Codec contract: common requirements, plus per-backend specs ([COMPONENT_MODEL.md](reference/codec-contract/COMPONENT_MODEL.md), [CORE.md](reference/codec-contract/CORE.md), [NATIVE.md](reference/codec-contract/NATIVE.md))
 - [reference/CODEC_RESOLUTION.md](reference/CODEC_RESOLUTION.md) — Codec resolution chain, backend preference, binary detection
@@ -23,7 +23,6 @@ Design rationale, analysis, and comparisons.
 - [design/CANONICAL_ABI_PERF.md](design/CANONICAL_ABI_PERF.md) — Performance investigation: where the time goes, Python vs. native host throughput, mitigations
 - [design/CACHING.md](design/CACHING.md) — Local codec store, download cache, and wasmtime compilation cache
 - [design/CODEC_DISTRIBUTION.md](design/CODEC_DISTRIBUTION.md) — Options for distributing `.wasm` codec artifacts (GitHub Releases, GHCR/OCI, warg)
-- [design/MULTI_MEMORY.md](design/MULTI_MEMORY.md) — Feasibility of multi-memory for zero-copy pipelines
 - [design/PIPELINE_TRADEOFFS.md](design/PIPELINE_TRADEOFFS.md) — Codec pipeline architecture trade-off analysis
 - [design/F3_COMPARISON.md](design/F3_COMPARISON.md) — Comparison with F3
 

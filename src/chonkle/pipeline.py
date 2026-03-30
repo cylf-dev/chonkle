@@ -105,15 +105,15 @@ class Pipeline:
     steps: dict[str, StepSpec]  # keys in topological execution order
 
     @classmethod
-    def parse(cls, source: Path | dict[str, Any]) -> Pipeline:
+    def parse(cls, pipeline: Path | dict[str, Any]) -> Pipeline:
         """Parse a pipeline JSON document into a validated Pipeline.
 
-        Reads and deserializes the JSON if ``source`` is a Path, then
+        Reads and deserializes the JSON if ``pipeline`` is a Path, then
         constructs a Pipeline, runs wiring validation, and computes a
         topological execution order for the steps.
 
         Args:
-            source: Either a Path to a JSON file on disk or a
+            pipeline: Either a Path to a JSON file on disk or a
                 pre-parsed dict representing the pipeline document.
 
         Returns:
@@ -127,11 +127,11 @@ class Pipeline:
                 references a non-existent step, or if the step
                 dependency graph contains a cycle.
         """
-        if isinstance(source, Path):
-            with source.open() as f:
+        if isinstance(pipeline, Path):
+            with pipeline.open() as f:
                 data: dict[str, Any] = json.load(f)
         else:
-            data = source
+            data = pipeline
 
         direction = data.get("direction")
         if direction not in ("encode", "decode"):
@@ -198,7 +198,7 @@ class PreparedPipeline:
 
 
 def prepare(
-    source: Path | dict[str, Any],
+    pipeline: Path | dict[str, Any],
     direction: Direction,
     *,
     resolver: Resolver | None = None,
@@ -211,7 +211,7 @@ def prepare(
     executable for the given direction.
 
     Args:
-        source: Either a Path to a pipeline JSON file or a pre-parsed
+        pipeline: Either a Path to a pipeline JSON file or a pre-parsed
             dict representing the pipeline document.
         direction: Direction to execute (``"encode"`` or ``"decode"``).
         resolver: Codec resolver. If ``None``, a default resolver is
@@ -226,16 +226,16 @@ def prepare(
     """
     from chonkle.resolver import Resolver
 
-    pipeline = Pipeline.parse(source)
+    parsed = Pipeline.parse(pipeline)
 
     if resolver is None:
-        resolver = Resolver(pipeline_sources=pipeline.sources)
+        resolver = Resolver(pipeline_sources=parsed.sources)
 
     codecs: dict[str, Codec] = {}
-    for step_name, step in pipeline.steps.items():
+    for step_name, step in parsed.steps.items():
         codecs[step_name] = resolver.resolve(step.codec_id)
 
-    _validate_codec_signatures(pipeline, codecs, direction)
+    _validate_codec_signatures(parsed, codecs, direction)
 
     encode_only_inputs: dict[str, frozenset[str]] = {}
     output_ports: dict[str, tuple[str, ...]] = {}
@@ -245,7 +245,7 @@ def prepare(
         output_ports[step_name] = tuple(sig.outputs.keys())
 
     return PreparedPipeline(
-        pipeline=pipeline,
+        pipeline=parsed,
         direction=direction,
         codecs=codecs,
         encode_only_inputs=encode_only_inputs,

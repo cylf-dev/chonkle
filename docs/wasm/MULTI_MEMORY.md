@@ -27,13 +27,12 @@ A hand-written codec that explicitly targets memory 1 for data plane access can 
 
 ## The toolchain gap: C and Rust cannot generate multi-memory code
 
-LLVM's WASM backend cannot emit load/store instructions targeting a non-zero memory index from C or Rust source code. When clang compiles `*ptr = value`, it emits `i32.store` targeting memory 0 unconditionally. There is no source-level annotation that changes this.
+LLVM's WASM backend cannot emit load/store instructions targeting a non-zero memory index from C or Rust source code. All load/store instructions target memory 0 unconditionally, and no source-level annotation changes this.
 
 Specifically:
 
-- **`__attribute__((address_space(N)))` is silently ignored** by the WASM backend. All load/store instructions target memory 0 regardless of the annotation. This was confirmed in [WebAssembly/multi-memory#45](https://github.com/WebAssembly/multi-memory/issues/45).
+- In C, **`__attribute__((address_space(N)))` is silently ignored** by the WASM backend. This was confirmed in [WebAssembly/multi-memory#45](https://github.com/WebAssembly/multi-memory/issues/45).
 - **No one is actively working on this in LLVM.** A WebAssembly contributor confirmed this in the same issue.
-- **Rust has the same limitation.** It compiles through LLVM and inherits the constraint.
 - **`--import-memory` in wasm-ld** controls whether memory 0 is imported or defined. It has no concept of a second memory.
 - **`--global-base`** controls the offset within a single memory, not which memory index to target.
 
@@ -50,14 +49,6 @@ The module would need to:
 3. Copy output from local buffer (memory 0) to shared memory (memory 1)
 
 This adds intra-step copies that would not exist if the library operated directly on its only memory.
-
-## The ideal arrangement and why it is not achievable
-
-The ideal layout would make the shared data plane memory 0 (so normal pointer dereferences access it) and put private module state in memory 1. Third-party library code would work on shared data without modification.
-
-This requires the toolchain to redirect data segments, shadow stack, and heap to memory 1. Standard LLVM cannot do this. There is no `--data-memory-index` flag in wasm-ld. Data segments always target memory 0. The shadow stack pointer (`__stack_pointer`) always addresses memory 0. Allocators (`malloc`, `memory.grow`) always operate on memory 0.
-
-Achieving this would require custom toolchain work or binary post-processing of every compiled module -- not practical for third-party library code.
 
 ## `--global-base` coordination
 
