@@ -66,6 +66,16 @@ The Wasm multi-memory proposal (part of Wasm 3.0) could in theory solve this: ea
 
 `wasm-tools compose` can merge multiple Component Model components into a single component. Intra-component calls share linear memory, so inter-step copies disappear. This requires a static pipeline known at build time, which is incompatible with the dynamic DAG model. Even with a static DAG, composition links function calls rather than data flow: in a fan-out, each downstream component independently calls the upstream component, causing it to run once per consumer instead of once for the graph.
 
+### Component Model resources
+
+Component Model resources are handle-based types: a component holds an integer handle to an object owned by another component, and the underlying data does not move when the handle is passed. See [../wasm/WIT_RESOURCES.md](../wasm/WIT_RESOURCES.md) for the general concepts.
+
+There are two patterns for sharing a resource across component boundaries. Pattern 1 (direct composition) requires B's WIT to name A's package at compile time — `use a:comp/blobs@0.1.0.{blob}`. This achieves 1 copy per edge but requires static coupling. chonkle pipelines are assembled at runtime from JSON; no codec knows its neighbors when it is compiled, so Pattern 1 is incompatible with the dynamic DAG model.
+
+Pattern 2 (shared buffer-store component) lets both A and B import from a shared third component. The orchestrator only exchanges handles, but data still crosses two component boundaries: A copies into the buffer-store via `blob.constructor()`, and B copies out via `blob.as-bytes()`. This gives 2 copies per edge — the same as `list<u8>` value passing.
+
+Additionally, wasmtime-py 41 does not support Component Model resource types. The Python API does not expose handles, resource tables, or destructors. wasmtime-rs supports resources fully, so they become available as a design option when the orchestrator moves to Rust — but the analysis above shows they offer no copy-count advantage for an orchestrated pipeline with dynamically assembled steps.
+
 ### Caller-supplied buffers (not yet available)
 
 The [WASI roadmap](https://wasi.dev/roadmap) includes caller-supplied buffers, which would allow a host to pass a pre-allocated buffer for the module to write into, eliminating the copy-out step. This is not yet part of the spec.

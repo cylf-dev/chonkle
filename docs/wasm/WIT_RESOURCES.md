@@ -213,67 +213,30 @@ the same way.
 
 ## Lift, lower, and copy counts
 
-Chonkle's codec interface uses `port-map` (`list<tuple<port-name, list<u8>>>`) as its
-WIT type: each port carries a `list<u8>` payload. Understanding the copy cost for this
-value-passing approach provides the baseline for the resource comparison that follows.
+"Lifting" is reading a value out of a component's linear memory into a representation the host can work with. "Lowering" is the inverse: writing a value from the host into a component's linear memory. Every cross-component value transfer involves a lift followed by a lower.
 
-"Lifting" is reading a value out of a component's linear memory into a representation
-the host can work with. "Lowering" is the inverse: writing a value from the host into
-a component's linear memory. Every cross-component value transfer involves a lift
-followed by a lower.
-
-For a `list<u8>` payload, the lift materializes the data into a host-side buffer (copy
-1: source component → host); the lower writes from that buffer into the destination
-component's memory (copy 2: host → destination component). With an orchestrator between
-steps, this occurs at every step boundary regardless of language:
+For a `list<u8>` payload, the lift materializes the data into a host-side buffer (copy 1: source component → host); the lower writes from that buffer into the destination component's memory (copy 2: host → destination component). In an orchestrated pipeline — where a host program routes data between independently compiled components — this occurs at every step boundary:
 
 ```text
-step N runs
-  → lift: step N's memory → host          (copy 1)
+component A runs
+  → lift: A's memory → host          (copy 1)
 orchestrator routes
-  → lower: host → step N+1's memory       (copy 2)
-step N+1 runs
+  → lower: host → B's memory         (copy 2)
+component B runs
 ```
 
-This gives **2 copies per step edge** for chonkle's `list<u8>` payloads in any
-orchestrated pipeline.
+This gives **2 copies per edge** for value types like `list<u8>` in any orchestrated component pipeline.
 
-## Why resources do not eliminate copies in chonkle's pipeline
+## Resources do not reduce copies in orchestrated pipelines
 
-**Pattern 1 breaks codec interchangeability.** For B to accept a `blob` handle from A,
-B's WIT must contain `use a:comp/blobs@0.1.0.{blob}` — it must name A's package at
-compile time. Chonkle pipelines are assembled at runtime from a JSON file; no codec
-knows its neighbors when it is compiled. Pattern 1 requires each codec to hardcode its
-upstream neighbor in its WIT, which destroys the generic plugin model.
+**Pattern 1 requires static coupling.** For B to accept a `blob` handle from A, B's WIT must contain `use a:comp/blobs@0.1.0.{blob}` — it must name A's package at compile time. In any pipeline where components are selected or assembled at runtime, no component knows its neighbors when it is compiled. Pattern 1 requires each component to hardcode its upstream neighbor in its WIT, which is incompatible with a generic plugin model.
 
-**`list<u8>` and Pattern 2 resources both give 2 copies per edge, but the mechanism
-differs.** With `list<u8>`, data surfaces in the host at every step boundary — the
-orchestrator is in the data path, as shown in the section above. With Pattern 2
-resources, the orchestrator only exchanges 32-bit handles and data never surfaces in the
-host, but data still crosses two component boundaries per edge: A calls
-`blob.constructor(data)`, copying its output into the buffer-store (copy 1: A's memory →
-buffer-store's memory), and B calls `blob.as-bytes()`, copying the data back out (copy
-2: buffer-store's memory → B's memory). The buffer-store replaces the host as the
-intermediate stop, but the boundary count is the same:
+**Pattern 2 resources give the same copy count as value passing, through a different mechanism.** With `list<u8>`, data surfaces in the host at every step boundary — the orchestrator is in the data path. With Pattern 2 resources, the orchestrator only exchanges 32-bit handles and data never surfaces in the host, but data still crosses two component boundaries per edge: A calls `blob.constructor(data)`, copying its output into the buffer-store (copy 1: A's memory → buffer-store's memory), and B calls `blob.as-bytes()`, copying the data back out (copy 2: buffer-store's memory → B's memory). The buffer-store replaces the host as the intermediate stop, but the boundary count is the same:
 
-| Approach                                   | Copies per edge                                         |
-| ------------------------------------------ | ------------------------------------------------------- |
-| `list<u8>` with orchestrator               | 2                                                       |
-| Resources, Pattern 2 (shared buffer-store) | 2                                                       |
-| Resources, Pattern 1 (direct composition)  | 1 — requires static coupling, incompatible with chonkle |
+| Approach | Copies per edge |
+| --- | --- |
+| `list<u8>` with orchestrator | 2 |
+| Resources, Pattern 2 (shared buffer-store) | 2 |
+| Resources, Pattern 1 (direct composition) | 1 — requires static compile-time coupling |
 
-The only path to 1 copy per edge is direct composition (Pattern 1), which eliminates
-the intermediate component from the data path but requires static compile-time coupling
-between codecs. See [DATA_COPIES.md](../design/DATA_COPIES.md) for full copy-count
-accounting.
-
-## Current status in chonkle
-
-wasmtime-py 41 does not support Component Model resource types. The Python API does
-not expose handles, resource tables, or destructors. All chonkle codec interfaces
-currently use `list<u8>` directly.
-
-wasmtime-rs (the Rust runtime) supports resources fully. When the orchestrator moves
-to Rust, resources become available as a design option — but the analysis above shows
-they offer no copy-count advantage over plain `list<u8>` for chonkle's orchestrated
-pipeline model.
+The only path to 1 copy per edge is direct composition (Pattern 1), which eliminates the intermediate component from the data path but requires static compile-time coupling between components.
