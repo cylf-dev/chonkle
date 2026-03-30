@@ -2,8 +2,8 @@
 
 Wasm codec implementations for the chonkle pipeline. Codecs fall into two categories:
 
-- **Component Model codecs** implement the `chonkle:codec/transform` WIT interface and are lifted to Component Model `.wasm` binaries. See [docs/reference/CODEC_CONTRACT.md](../docs/reference/CODEC_CONTRACT.md).
-- **Core Wasm codecs** are wasm32-wasi reactor modules that export `memory`, `alloc`, `dealloc`, `encode`, and `decode` using the binary port-map wire format. See [docs/reference/CORE_ABI.md](../docs/reference/CORE_ABI.md).
+- **Component Model codecs** implement the `chonkle:codec/transform` WIT interface and are lifted to Component Model `.wasm` binaries. See [docs/reference/codec-contract/component-model.md](../docs/reference/codec-contract/component-model.md).
+- **Core Wasm codecs** are wasm32-wasi reactor modules that export `memory`, `alloc`, `dealloc`, `encode`, and `decode` using the binary port-map wire format. See [docs/reference/codec-contract/core.md](../docs/reference/codec-contract/core.md).
 
 All codec build processes include a post-build step to embed the codec signature into the `.wasm` binary:
 
@@ -122,10 +122,10 @@ GitHub release to match the `wasmtime` Python package version.
 
 ### Core Wasm codec
 
-1. Implement and export `memory`, `alloc`, `dealloc`, `encode`, and `decode` per the [core ABI spec](../docs/reference/CORE_ABI.md).
+1. Implement and export `memory`, `alloc`, `dealloc`, `encode`, and `decode` per the [core ABI spec](../docs/reference/codec-contract/core.md).
 2. Build to a core wasm32-wasi `.wasm` and place it in `codec/<name>/`.
 3. Write a `signature.json` in the codec directory.
 4. Embed the signature: `chonkle embed-signature <name>.wasm signature.json`.
 5. Add a `.gitignore` for your toolchain's build artifacts.
 
-See [docs/reference/CODEC_CONTRACT.md](../docs/reference/CODEC_CONTRACT.md) for the Component Model signature format and port conventions, or [docs/reference/CORE_ABI.md](../docs/reference/CORE_ABI.md) for the core ABI contract.
+See [docs/reference/codec-contract/](../docs/reference/codec-contract/) for the codec contract (common requirements and per-backend specs).

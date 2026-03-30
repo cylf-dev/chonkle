@@ -10,8 +10,7 @@ chonkle is a Python host for running data codec pipelines. Pipelines are DAGs of
 
 Specs for codec and pipeline authors.
 
-- [reference/CODEC_CONTRACT.md](reference/CODEC_CONTRACT.md) — Codec contract: what each backend must implement (Component Model WIT, Core ABI, native)
-- [reference/CORE_ABI.md](reference/CORE_ABI.md) — Core ABI contract: port-map wire format, required exports, calling convention
+- [reference/codec-contract/](reference/codec-contract/) — Codec contract: common requirements, plus per-backend specs ([Component Model](reference/codec-contract/component-model.md), [Core Wasm](reference/codec-contract/core.md), [native](reference/codec-contract/native.md))
 - [reference/PIPELINE_SCHEMA.md](reference/PIPELINE_SCHEMA.md) — Pipeline JSON schema: DAG structure, wiring references, step fields
 - [reference/protospec/](reference/protospec/) — Codec inventory: named codecs with typed signatures
 - [reference/comparisons/](reference/comparisons/) — Codec pipeline tradeoff analysis and F3 comparison

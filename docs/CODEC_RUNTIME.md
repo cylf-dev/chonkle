@@ -30,7 +30,7 @@ chonkle supports three codec backends. All three implement the `Codec` ABC with 
 
 Throughput is limited by the Python canonical ABI binding (approximately 1.7 MB/s measured).
 
-See [CODEC_CONTRACT.md](reference/CODEC_CONTRACT.md) for the full interface specification.
+See [codec-contract/component-model.md](reference/codec-contract/component-model.md) for the full interface specification.
 
 ### Core Wasm
 
@@ -40,7 +40,7 @@ wasm32-wasi reactor modules using a binary port-map wire format via `Memory.read
 
 `CoreWasmCodec.call()` returns `CoreWasmRef` deferred values -- bulk data stays in linear memory until consumed by a downstream codec. Non-core downstream codecs receive materialized bytes.
 
-See [CORE_ABI.md](reference/CORE_ABI.md) for the wire format specification.
+See [codec-contract/core.md](reference/codec-contract/core.md) for the wire format specification.
 
 ### Native (numcodecs)
 

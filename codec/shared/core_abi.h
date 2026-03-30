@@ -2,7 +2,7 @@
  * Core ABI helpers for chonkle core wasm codecs.
  *
  * Provides port-map serialization/deserialization for the binary wire
- * format defined in docs/reference/CORE_ABI.md.
+ * format defined in docs/reference/codec-contract/core.md.
  */
 #ifndef CORE_ABI_H
 #define CORE_ABI_H

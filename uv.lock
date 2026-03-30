@@ -275,6 +275,12 @@ dependencies = [
     { name = "wasmtime" },
 ]
 
+[package.optional-dependencies]
+native = [
+    { name = "numcodecs" },
+    { name = "numpy" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
@@ -291,9 +297,12 @@ notebook = [
 
 [package.metadata]
 requires-dist = [
+    { name = "numcodecs", marker = "extra == 'native'" },
+    { name = "numpy", marker = "extra == 'native'" },
     { name = "oras" },
     { name = "wasmtime" },
 ]
+provides-extras = ["native"]
 
 [package.metadata.requires-dev]
 dev = [

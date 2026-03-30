@@ -10,7 +10,7 @@ chonkle supports three codec backends. Each implements the same `Codec` ABC (`ca
 
 **Component Model Wasm** -- `.wasm` components implementing the `chonkle:codec/transform@0.1.0` WIT interface. Data transfer uses the canonical ABI (~1.7 MB/s measured throughput in the Python binding). Any language with a Component Model toolchain (Rust, C, Python via componentize-py) can implement the WIT interface. The Wasmtime sandbox isolates each component from the host.
 
-**Core Wasm** -- wasm32-wasi reactor modules using a binary port-map wire format via `Memory.read`/`Memory.write`. Data transfer throughput is ~10 GB/s. When consecutive pipeline steps are both core wasm, data transfers between their linear memories use `ctypes.memmove` (single-copy, no serialization round-trip). Core wasm modules export `memory`, `alloc`, `dealloc`, `encode`, and `decode`. The wire format is specified in `docs/reference/CORE_ABI.md`.
+**Core Wasm** -- wasm32-wasi reactor modules using a binary port-map wire format via `Memory.read`/`Memory.write`. Data transfer throughput is ~10 GB/s. When consecutive pipeline steps are both core wasm, data transfers between their linear memories use `ctypes.memmove` (single-copy, no serialization round-trip). Core wasm modules export `memory`, `alloc`, `dealloc`, `encode`, and `decode`. The wire format is specified in `docs/reference/codec-contract/core.md`.
 
 **Native (numcodecs)** -- Python codecs from the [numcodecs](https://numcodecs.readthedocs.io/) library. No Wasm overhead. `numcodecs` and `numpy` are optional dependencies, imported lazily. Signatures are bundled as JSON files in `src/chonkle/signatures/numcodecs/`. Adding a new numcodecs codec requires only adding a signature file.
 

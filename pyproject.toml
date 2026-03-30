@@ -9,6 +9,9 @@ dependencies = [
     "wasmtime",
 ]
 
+[project.optional-dependencies]
+native = ["numcodecs", "numpy"]
+
 [project.scripts]
 chonkle = "chonkle.cli:main"
 
