@@ -4,7 +4,7 @@ A pipeline is a DAG of codec steps defined in a JSON file. A pipeline JSON is an
 
 However, a pipeline is conceptually a codec: a codec signature for the pipeline can be derived from the pipeline JSON. The input names and types come directly from the `inputs` field; constants appear as optional inputs with their baked-in value as the default; and output types are inferred by tracing each output wiring reference back through the step signatures.
 
-## Top-level fields
+## Pipeline Object
 
 ```json
 {
@@ -44,6 +44,10 @@ The canonical identifier for this pipeline. A pipeline is itself a codec per pro
 
 `"encode"` or `"decode"`. Declares which direction this pipeline definition represents. Pass a `direction` to `run()` that differs from `pipeline.direction` to execute the pipeline in the opposite direction (inverted step order, opposite encode/decode function).
 
+### `sources` (object, optional)
+
+Maps codec_ids to download URIs for codec artifacts. Supported URI schemes: `file://`, `https://`, `oci://` (`http://` raises `ValueError`). These are advisory fetch hints for the `Resolver`: if a codec_id is not found in the local store or via other resolution mechanisms, the resolver downloads from the URI listed here.
+
 ### `inputs` (object, required)
 
 The pipeline's public input ports -- what callers must supply. Each key is a port name; each value is a descriptor:
@@ -51,7 +55,7 @@ The pipeline's public input ports -- what callers must supply. Each key is a por
 - `type` (string, required): the semantic type of the port. Valid values follow the protospec type vocabulary (see the [Types section of the codec inventory](https://github.com/cylf-dev/protospec/blob/main/codec-inventory.md#types)): `"bytes"`, `"string"`, `"int"`, `"uint"`, `"float"`, `"bool"`, `"uint[]"`, `"dtype_desc"`.
 - `encode_only` (bool, optional): if true, this input is only meaningful during encoding. It is omitted from the port-map during decode, and any derived codec signature will carry this annotation so that outer pipelines can handle it correctly.
 
-`required` and `default` are absent. All pipeline inputs are caller-supplied -- there is no fallback at the pipeline boundary. Parameters with baked-in values belong in `constants`.
+`required` and `default` are absent (unlike codec signature inputs, which carry both). All pipeline inputs are caller-supplied -- there is no fallback at the pipeline boundary. Parameters with baked-in values belong in `constants`.
 
 ### `constants` (object, optional)
 
@@ -62,10 +66,6 @@ Values baked into the pipeline definition. Constants are never supplied by the c
 
 Constants use the `constant.<name>` wiring namespace, which is distinct from `input.<name>`. During pipeline inversion, pipeline inputs become pipeline outputs (and vice versa), but constants remain constants -- available as configuration in both directions.
 
-### `sources` (object, optional)
-
-Maps codec_ids to download URIs for codec artifacts. Supported URI schemes: `file://`, `https://`, `oci://` (`http://` raises `ValueError`). These are advisory fetch hints for the `Resolver`: if a codec_id is not found in the local store or via other resolution mechanisms, the resolver downloads from the URI listed here.
-
 ### `outputs` (object, required)
 
 Maps each pipeline output port name to the step port that produces it. The key is the name callers use to retrieve results from the returned port-map; the value is a wiring reference of the form `step_name.port_name`. An output port may be renamed relative to the source step's port name. Types are not declared here -- they are derived from the source step's codec signature during validation.
@@ -74,9 +74,9 @@ Maps each pipeline output port name to the step port that produces it. The key i
 
 A named map of step objects. Keys are step names (unique DAG node identifiers used in wiring references). Order in JSON does not matter -- topological sort determines execution order. See [Steps](#steps) below.
 
----
-
 ## Steps
+
+Each step invokes a codec. The step's `codec_id` resolves to a codec signature, which defines the port names, types, and encode-only annotations that the step's wiring must satisfy.
 
 ```json
 "steps": {
@@ -103,15 +103,7 @@ The logical codec identifier. The `Resolver` maps this to a `Codec` instance. Ma
 
 ### `inputs` (object, required)
 
-Maps each codec input port name to a wiring reference. The key is the port name as declared in the codec signature; the value is a wiring reference (see [Wiring References](#wiring-references)). No type information is included -- types come from the codec signature.
-
-### Fields absent from steps
-
-- **`src`**: removed. Implementation selection is the resolver's responsibility. The pipeline-level `sources` field provides optional download hints, but the resolver controls which backend (core wasm, component model, or native) is used for each codec_id.
-- **`outputs`**: removed. Output port names come from codec signatures and are validated at `prepare()` time against wiring references that target a step's outputs.
-- **`encode_only_inputs`**: removed. Encode-only ports are derived from codec signature `encode_only` fields at `prepare()` time. `PreparedPipeline` precomputes the encode-only input set for each step.
-
----
+Maps each codec input port name to a wiring reference. The key is the port name as declared in the codec signature; the value is a wiring reference (see [Wiring References](#wiring-references)). No type information is included—types come from the codec signature.
 
 ## Wiring References
 
@@ -125,8 +117,6 @@ A wiring reference is a dot-notation string identifying the source of a value:
 
 Wiring references are parsed into `WiringRef` objects at pipeline construction time. Step existence and input/constant refs are validated at parse time. Step output port refs (references to `<step_name>.<port>`) are validated at `prepare()` time against codec signatures.
 
----
-
 ## Codec Type Detection
 
 The codec type for each step is not declared in the pipeline schema. It is detected from the resolved binary by reading the 8-byte wasm header:
@@ -135,19 +125,17 @@ The codec type for each step is not declared in the pipeline schema. It is detec
 - `.wasm` with component version header (`0d 00 01 00`) -- `ComponentCodec`
 - No wasm binary (numcodecs registry) -- `NativeCodec`
 
----
-
 ## Divergences from the Protospec
 
 The protospec pipeline format is the upstream reference. The following changes were made deliberately.
 
-### `sources` at pipeline level instead of `src` per step
+### `sources` (chonkle addition)
 
 **Protospec**: no equivalent (codec resolution is implicit via registry)
 
 **Ours**: `"sources": {"codec_id": "oci://..."}` at the pipeline level
 
-The protospec assumes a registry from which codecs are resolved by `codec_id`. `sources` provides advisory download URIs for the resolver when a codec is not available locally. This is a pipeline-level map rather than a per-step field because multiple steps may share the same codec_id, and implementation selection (which backend to use) is the resolver's concern, not the pipeline's.
+The protospec assumes codecs are resolved from a registry by `codec_id`. Chonkle doesn't have a registry yet, so `sources` gives the resolver advisory download hints for codecs not available locally.
 
 ### `"codec"` renamed to `"codec_id"` in steps
 
@@ -157,21 +145,11 @@ The protospec assumes a registry from which codecs are resolved by `codec_id`. `
 
 `codec_id` is the consistent term for a codec identifier throughout the rest of the schema (top-level `codec_id`, codec signatures). Using `codec` in steps would be the only place the shorter form appeared.
 
-### No `configuration` field
+### No `outputs` on steps
 
-**Protospec**: `"configuration": {"level": 3}` on steps
+**Protospec**: steps have an `"outputs"` field that aliases output port names, e.g. `"outputs": {"bytes": "raw_uints"}`. Other steps reference the alias (`decode_varint.raw_uints`), not the codec signature name.
 
-**Ours**: absent
-
-All codec parameters flow through port-maps via pipeline-level constants. A step wires `"level": "constant.level"` in its `inputs`. This keeps the data flow uniform -- every value a codec receives arrives through the same port-map mechanism.
-
-### `encode_only` is a codec signature property
-
-**Protospec**: `encode_only` is a property of codec signature inputs
-
-**Ours**: same, but the pipeline schema does not redeclare it on steps
-
-Encode-only routing is derived from codec signatures at `prepare()` time and precomputed on `PreparedPipeline`. The pipeline JSON does not carry `encode_only_inputs` on steps. Pipeline-level inputs may carry `encode_only: true` for derived codec signature purposes.
+**Ours**: steps have only `inputs`. Output ports are referenced by their codec signature names directly (e.g., `decode_varint.bytes`). Output port names are validated at `prepare()` time against the codec signature.
 
 ### `encode_only` on pipeline inputs
 
