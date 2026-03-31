@@ -280,6 +280,15 @@ class TestNativeCodecNdarrayFormat:
         result = np.frombuffer(decoded[0][1], dtype="<U4")
         np.testing.assert_array_equal(result, arr)
 
+    def test_json2_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("json2")
+        arr = np.array([1.0, 2.0, 3.0], dtype="<f4")
+        data = arr.tobytes()
+        encoded = codec.call("encode", [("bytes", data), ("dtype", b'"<f4"')])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        result = np.frombuffer(decoded[0][1], dtype="<f4")
+        np.testing.assert_array_equal(result, arr)
+
     def test_ndarray_missing_dtype_raises(self) -> None:
         codec = NativeCodec("delta")
         data = bytes(range(16))
