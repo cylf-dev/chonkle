@@ -3,7 +3,7 @@
 The Resolver handles finding, downloading, and instantiating codec
 implementations for a pipeline. It maintains a local codec store
 indexed by codec_id and implementation name. Set
-``CHONKLE_FORCE_INSTALL=1`` to overwrite an existing store entry when
+CHONKLE_FORCE_INSTALL=1 to overwrite an existing store entry when
 re-installing a codec from a source URI.
 """
 
@@ -95,30 +95,30 @@ class Resolver:
 
     Resolution order:
 
-    1. Explicit paths (if provided via ``paths``)
+    1. Explicit paths (if provided via paths)
     2. Force sources (download from URI regardless of store)
     3. Per-codec overrides (specific implementation name)
-    4. Local store (selected by backend preference)
+    4. Local store and native (selected by backend preference)
     5. Pipeline sources (download and install)
 
     Args:
         codec_store: Path to the local codec store directory.
-            Defaults to ``CHONKLE_CODEC_STORE`` env var or
-            ``~/.chonkle/codecs``.
+            Defaults to CHONKLE_CODEC_STORE env var or
+            ~/.chonkle/codecs.
         preference: Ordered list of backend types to prefer when
             multiple implementations exist for a codec_id.
-            Supported values: ``"core"``, ``"component"``, ``"native"``.
+            Supported values: "core", "component", "native".
         overrides: Maps codec_id to a specific implementation name,
             bypassing the preference system.
         force_sources: Maps codec_id to a download URI. Unlike
-            ``pipeline_sources``, these are fetched unconditionally,
+            pipeline_sources, these are fetched unconditionally,
             bypassing the local store. The fetched binary is
             installed into the store (overwriting any existing
             entry with the same implementation name).
         pipeline_sources: Maps codec_id to a download URI (from the
-            pipeline's ``sources`` field).
-        paths: Maps codec_id to a specific ``.wasm`` file path.
-            Useful for testing and ``--codec-path`` CLI usage.
+            pipeline's sources field).
+        paths: Maps codec_id to a specific .wasm file path.
+            Useful for testing.
         engine: Shared Wasmtime engine for codec instantiation.
             If not provided, a new engine with compilation caching
             is created.
@@ -168,7 +168,7 @@ class Resolver:
             ValueError: If no implementation is found or the resolved
                 binary uses an unsupported backend.
         """
-        # 0. Explicit paths (testing, CLI --codec-path)
+        # 0. Explicit paths (testing)
         if codec_id in self._paths:
             return self._instantiate(self._paths[codec_id])
 
@@ -207,11 +207,7 @@ class Resolver:
         entries: dict[str, CodecInfo],
         has_native: bool,
     ) -> Codec:
-        """Select the best implementation for *codec_id* using the preference list.
-
-        Considers both wasm entries from the local store and the native
-        (numcodecs) backend if a signature file exists.
-        """
+        """Select the best implementation for a codec_id using the preference list."""
         for pref in self._preference:
             if pref == Backend.NATIVE and has_native:
                 return NativeCodec(codec_id)
@@ -228,6 +224,7 @@ class Resolver:
         raise ValueError(msg)
 
     def _resolve_override(self, codec_id: str, impl_name: str) -> Codec:
+        """Resolve a codec_id using a specific implementation name override."""
         entries = self._store.get_index().get(codec_id, {})
         if impl_name in entries:
             return self._instantiate(entries[impl_name].location)

@@ -17,8 +17,8 @@ class ComponentCodec(Codec):
     """Wraps a Component Model Wasm codec.
 
     Instantiates a Wasmtime Component Model component and calls
-    ``encode``/``decode`` via the WIT ``chonkle:codec/transform`` interface.
-    Signature is read from the ``chonkle:signature`` custom section at init.
+    encode/decode via the WIT chonkle:codec/transform interface.
+    Signature is read from the chonkle:signature custom section at init.
     """
 
     def __init__(self, engine: wasmtime.Engine, wasm_path: Path) -> None:
@@ -67,7 +67,7 @@ class ComponentCodec(Codec):
         store: wasmtime.Store,
         fn_name: str,
     ) -> Any:
-        """Return the named Func from the CODEC_TRANSFORM_IFACE interface export."""
+        """Return the named function from the codec transform interface export."""
         comp_exports = self._component.type.exports(self._engine)
         item = comp_exports.get(CODEC_TRANSFORM_IFACE)
         if isinstance(item, wasmtime.component.ComponentInstanceType):

@@ -5,7 +5,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 
 wasmtime::component::bindgen!({
     world: "codec",
-    path: "../../wit/codec.wit",
+    path: "../../codec/wit/codec.wit",
 });
 
 struct State {

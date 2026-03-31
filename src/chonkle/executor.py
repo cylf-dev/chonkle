@@ -21,11 +21,11 @@ def run(
     """Execute a prepared pipeline and return output port values.
 
     Args:
-        prepared: A :class:`PreparedPipeline` from :func:`prepare`.
-        inputs: Pipeline-level input names mapped to byte values.  For
-            forward execution (``direction == pipeline.direction``) keys
-            correspond to ``pipeline.inputs`` names.  For inverted
-            execution keys correspond to ``pipeline.outputs`` names.
+        prepared: A PreparedPipeline from prepare().
+        inputs: Pipeline-level input names mapped to byte values. For
+            forward execution (direction == pipeline.direction) keys
+            correspond to pipeline.inputs names. For inverted
+            execution keys correspond to pipeline.outputs names.
 
     Returns:
         Pipeline output names mapped to byte values.
@@ -64,11 +64,7 @@ def _execute_forward(
     prepared: PreparedPipeline,
     inputs: dict[str, bytes],
 ) -> dict[str, bytes]:
-    """Execute steps in topological order, calling the direction function.
-
-    Seeds value_store with constants and pipeline inputs (omitting encode_only
-    inputs when direction is ``"decode"``).
-    """
+    """Execute steps in topological order, calling the direction function."""
     pipeline = prepared.pipeline
     direction = prepared.direction
     value_store: dict[str, bytes | CoreWasmRef] = {}
@@ -109,7 +105,7 @@ def _execute_inverted(
     prepared: PreparedPipeline,
     inputs: dict[str, bytes],
 ) -> dict[str, bytes]:
-    """Execute steps in reversed topological order, routing results backward."""
+    """Execute steps in reverse topological order, routing results backward."""
     pipeline = prepared.pipeline
     direction = prepared.direction
     value_store: dict[str, bytes | CoreWasmRef] = {}
@@ -159,13 +155,7 @@ def _forward_port_map(
     decode_only_inputs: frozenset[str],
     codec: object,
 ) -> OutputPortMap:
-    """Build the port-map for a step in forward execution.
-
-    Iterates step.inputs, omitting encode_only ports when direction is decode
-    and decode_only ports when direction is encode.
-    ``CoreWasmRef`` values are passed through for core wasm codecs (enabling
-    single-copy transfer) and materialized to bytes for other backends.
-    """
+    """Build the port-map for a step in forward execution."""
     is_core = isinstance(codec, CoreWasmCodec)
     port_map: OutputPortMap = []
     for port_name, ref in step.inputs.items():
@@ -190,14 +180,7 @@ def _inverted_port_map(
     decode_only_inputs: frozenset[str],
     codec: object,
 ) -> OutputPortMap:
-    """Build the port-map for a step in inverted execution.
-
-    The step's forward-direction outputs (from signature) become its
-    inverted-direction inputs. Inputs wired from constants (not direction-only)
-    are always included. encode_only_inputs are appended only when calling
-    encode; decode_only_inputs only when calling decode. ``CoreWasmRef`` values
-    are passed through for core wasm codecs and materialized for other backends.
-    """
+    """Build the port-map for a step in inverted execution."""
     is_core = isinstance(codec, CoreWasmCodec)
     port_map: OutputPortMap = []
     for port_name in output_ports:
@@ -224,7 +207,7 @@ def _inverted_port_map(
 
 
 def _materialize(value: bytes | CoreWasmRef) -> bytes:
-    """Resolve a value to bytes, materializing ``CoreWasmRef`` if needed."""
+    """Resolve a value to bytes, materializing CoreWasmRef if needed."""
     if isinstance(value, CoreWasmRef):
         return value.materialize()
     return value

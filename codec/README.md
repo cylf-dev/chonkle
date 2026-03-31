@@ -98,7 +98,7 @@ Used by C+Zig codecs:
 Regenerate WIT bindings after any WIT interface change:
 
 ```
-wit-bindgen c wit/ --world codec --out-dir codec/shared/
+wit-bindgen c codec/wit/ --world codec --out-dir codec/shared/
 ```
 
 ## WASI adapter — wasi_snapshot_preview1.reactor.wasm

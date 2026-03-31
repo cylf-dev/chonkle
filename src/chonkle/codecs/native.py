@@ -12,11 +12,7 @@ from chonkle.wasm_signature import Signature
 
 
 def _native_signature_path(codec_id: str) -> Path:
-    """Return the path to a native codec's bundled signature JSON file.
-
-    Raises:
-        ValueError: No signature file exists for *codec_id*.
-    """
+    """Return the path to a native codec's bundled signature JSON file."""
     sig_path = SIGNATURES_DIR / f"{codec_id}.json"
     if not sig_path.exists():
         msg = f"No native codec signature for {codec_id!r} (looked in {SIGNATURES_DIR})"
@@ -27,22 +23,21 @@ def _native_signature_path(codec_id: str) -> Path:
 class NativeCodec(Codec):
     """Wraps a numcodecs codec object.
 
-    Instantiated from a ``codec_id`` that must have a matching signature
-    file in ``src/chonkle/signatures/numcodecs/``. ``numcodecs`` is
-    imported lazily — users who only use wasm codecs do not need it
-    installed.
+    Instantiated from a codec_id that must have a matching signature
+    file in src/chonkle/signatures/numcodecs/. numcodecs is imported
+    lazily — users who only use wasm codecs do not need it installed.
 
-    The ``native`` block in the signature JSON controls the calling
+    The native block in the signature JSON controls the calling
     convention per direction:
 
-    - ``mode: "bytes"``: the ``bytes`` port is passed directly to
-      ``codec.encode()`` / ``codec.decode()``.
-    - ``mode: "ndarray"``: the ``bytes`` port is interpreted as a raw
+    - mode: "bytes": the bytes port is passed directly to
+      codec.encode() / codec.decode().
+    - mode: "ndarray": the bytes port is interpreted as a raw
       buffer, converted to a numpy ndarray using the dtype from the
-      port named by ``dtype_port``, processed, and converted back to
+      port named by dtype_port, processed, and converted back to
       bytes.
 
-    ``constructor_ports`` lists input port names whose JSON-decoded
+    constructor_ports lists input port names whose JSON-decoded
     values are passed as kwargs to the numcodecs codec constructor.
     """
 

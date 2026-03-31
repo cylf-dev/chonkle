@@ -47,22 +47,20 @@ class WiringRef:
         """Parse a dot-notation wiring reference string into a WiringRef.
 
         Accepts the three wiring reference forms used in pipeline JSON:
-        ``"input.<port>"``, ``"constant.<port>"``, and
-        ``"<step_name>.<port>"``.
+        "input.<port>", "constant.<port>", and "<step_name>.<port>".
 
         Args:
             ref_str: A dot-separated wiring reference of the form
-                ``<source>.<port>``.  The source is either the literal
-                string ``"input"``, the literal string ``"constant"``,
+                <source>.<port>. The source is either the literal
+                string "input", the literal string "constant",
                 or the name of a pipeline step.
 
         Returns:
-            A WiringRef with ``kind`` set to ``"input"``,
-            ``"constant"``, or ``"step"`` depending on the source token.
+            A WiringRef with kind set to "input", "constant", or "step"
+            depending on the source token.
 
         Raises:
-            ValueError: If ``ref_str`` does not contain exactly one
-                dot separator.
+            ValueError: If ref_str does not contain a dot separator.
         """
         parts = ref_str.split(".", 1)
         if len(parts) != 2:
@@ -109,7 +107,7 @@ class Pipeline:
     def parse(cls, pipeline: Path | dict[str, Any]) -> Pipeline:
         """Parse a pipeline JSON document into a validated Pipeline.
 
-        Reads and deserializes the JSON if ``pipeline`` is a Path, then
+        Reads and deserializes the JSON if pipeline is a Path, then
         constructs a Pipeline, runs wiring validation, and computes a
         topological execution order for the steps.
 
@@ -118,15 +116,13 @@ class Pipeline:
                 pre-parsed dict representing the pipeline document.
 
         Returns:
-            A fully validated Pipeline with ``execution_order``
-            populated in topological order.
+            A fully validated Pipeline with steps ordered topologically.
 
         Raises:
-            ValueError: If ``direction`` is missing or not
-                ``"encode"`` or ``"decode"``, if ``codec_id`` is not
-                a string, if any wiring reference is unresolvable or
-                references a non-existent step, or if the step
-                dependency graph contains a cycle.
+            ValueError: If direction is missing or not "encode"/"decode",
+                if codec_id is not a string, if any wiring reference is
+                unresolvable or references a non-existent step, or if the
+                step dependency graph contains a cycle.
         """
         if isinstance(pipeline, Path):
             with pipeline.open() as f:
@@ -190,7 +186,7 @@ class Pipeline:
 class PreparedPipeline:
     """A pipeline that has been validated and is ready for execution.
 
-    Created by :func:`prepare`.  Pass to :func:`run` to execute.
+    Created by prepare(). Pass to run() to execute.
     """
 
     pipeline: Pipeline
@@ -217,12 +213,12 @@ def prepare(
     Args:
         pipeline: Either a Path to a pipeline JSON file or a pre-parsed
             dict representing the pipeline document.
-        direction: Direction to execute (``"encode"`` or ``"decode"``).
-        resolver: Codec resolver. If ``None``, a default resolver is
-            created using the pipeline's ``sources`` field.
+        direction: Direction to execute ("encode" or "decode").
+        resolver: Codec resolver. If None, a default resolver is
+            created using the pipeline's sources field.
 
     Returns:
-        A :class:`PreparedPipeline` ready for :func:`~chonkle.executor.run`.
+        A PreparedPipeline ready for executor.run().
 
     Raises:
         ValueError: Parsing fails, signature validation fails, a codec
@@ -266,21 +262,7 @@ def _validate_wiring(
     constants: dict[str, ConstantDescriptor],
     outputs: dict[str, WiringRef],
 ) -> None:
-    """Validate step declarations and all wiring references.
-
-    Performs the following checks in order:
-
-    1. Every step input wiring reference resolves to a declared
-       pipeline input, constant, or an existing step.
-    2. Every pipeline output wiring reference resolves in the
-       same way.
-
-    Step output port validation is deferred to ``prepare()`` time,
-    where codec signatures are available.
-
-    Raises:
-        ValueError: If any of the above checks fail.
-    """
+    """Validate step declarations and all wiring references."""
     step_names = set(steps.keys())
 
     for step in steps.values():
@@ -310,25 +292,7 @@ def _validate_wiring_ref(
     context: str,
     step_names: set[str],
 ) -> None:
-    """Validate a single pre-parsed wiring reference against pipeline declarations.
-
-    For ``input`` references, confirms the port is declared in
-    *inputs*.  For ``constant`` references, confirms the name is
-    declared in *constants*.  For step references, confirms the step
-    exists.  Output port validation is deferred to ``prepare()`` time
-    where codec signatures are available.
-
-    Args:
-        inputs: Pipeline-level input declarations.
-        constants: Pipeline-level constant declarations.
-        ref: A pre-parsed WiringRef.
-        context: A human-readable label for the reference site,
-            used in error messages.
-        step_names: The set of all step names defined in the pipeline.
-
-    Raises:
-        ValueError: If the reference is unresolvable.
-    """
+    """Validate a single wiring reference against pipeline declarations."""
     if ref.kind == "input":
         if ref.port not in inputs:
             msg = (
@@ -350,26 +314,7 @@ def _validate_wiring_ref(
 
 
 def _topological_sort(steps: dict[str, StepSpec]) -> list[str]:
-    """Return step names in a valid execution order using Kahn's algorithm.
-
-    Builds an in-degree map and adjacency list from the step wiring
-    references, then processes nodes with zero in-degree iteratively
-    until all steps are ordered or a cycle is detected.
-
-    Args:
-        steps: The dict of step name to StepSpec objects to sort.
-            Only ``"step"``-kind wiring references (i.e. inter-step
-            dependencies) are considered; ``"input"`` and
-            ``"constant"`` references do not contribute edges.
-
-    Returns:
-        A list of step names ordered so that every step appears
-        after all steps it depends on.
-
-    Raises:
-        ValueError: If the dependency graph contains a cycle,
-            listing the step names involved.
-    """
+    """Return step names in a valid execution order using Kahn's algorithm."""
     in_degree: dict[str, int] = dict.fromkeys(steps, 0)
     dependents: dict[str, list[str]] = defaultdict(list)
 
@@ -416,17 +361,7 @@ def _validate_codec_signatures(
     codecs: Mapping[str, Codec],
     direction: Direction,
 ) -> None:
-    """Validate all step signatures before any component is called.
-
-    For each step in topological order, checks that wiring refs targeting
-    upstream step outputs name ports that exist in the signature, validates
-    input/output port types and direction constraints, and accumulates
-    output types for downstream type checking. After the per-step loop,
-    validates pipeline output wiring refs the same way.
-
-    Collects errors from every step and raises a single ValueError listing
-    all problems.
-    """
+    """Validate all step signatures and collect errors into a single ValueError."""
     errors: list[str] = []
     ctx = _ValidationContext(
         pipeline=pipeline,
@@ -462,23 +397,7 @@ def _validate_step_signature(
     signature: Signature,
     ctx: _ValidationContext,
 ) -> None:
-    """Verify a step's wiring and port declarations against codec signatures.
-
-    Checks that wiring refs targeting upstream step outputs name ports that
-    exist in the upstream codec's signature, then validates input/output port
-    types and direction constraints. Each check is a subset check — the step
-    need not use every port the codec declares. Input validation is
-    direction-aware: encode_only ports are excluded from the valid input set
-    when direction is "decode".
-
-    Args:
-        step: Step whose declared inputs are being checked.
-        signature: The codec signature (from ``codec.signature()``).
-        ctx: Accumulated cross-step validation state.
-
-    Raises:
-        ValueError: Declared ports are not valid per the signature.
-    """
+    """Verify a step's wiring and port declarations against its codec signature."""
     errors: list[str] = []
 
     for port_name, ref in step.inputs.items():
@@ -543,11 +462,7 @@ def _check_input_types(
     active_inputs: set[str],
     ctx: _ValidationContext,
 ) -> list[str]:
-    """Return type-mismatch error strings for each active wired input.
-
-    Only checks ports in *active_inputs* (step inputs minus encode_only
-    when decoding), avoiding redundant direction/encode_only filtering.
-    """
+    """Return type-mismatch error strings for each active wired input."""
     errors: list[str] = []
     for port_name in active_inputs:
         if port_name not in sig_inputs:

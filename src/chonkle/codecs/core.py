@@ -23,8 +23,8 @@ class CoreWasmRef:
     """Deferred reference to data in a core wasm module's linear memory.
 
     The data remains in linear memory and is not copied to Python until
-    ``materialize()`` is called. This enables single-copy transfer between
-    sequential core wasm codec steps via ``ctypes.memmove``.
+    materialize() is called. This enables single-copy transfer between
+    sequential core wasm codec steps via ctypes.memmove.
     """
 
     codec: CoreWasmCodec
@@ -56,13 +56,12 @@ class CoreWasmCodec(Codec):
     """Wraps a Core Wasm codec implementing the core port-map ABI.
 
     Instantiates a core wasm32-wasi reactor module and calls
-    ``encode``/``decode`` using the binary port-map wire format via
-    ``Memory.read``/``Memory.write``. The module instance is kept alive
+    encode/decode using the binary port-map wire format via
+    Memory.read/Memory.write. The module instance is kept alive
     for the codec's lifetime so downstream core codecs can single-copy
     transfer data directly from this module's linear memory.
 
-    Required module exports: ``memory``, ``alloc``, ``dealloc``,
-    ``encode``, ``decode``.
+    Required module exports: memory, alloc, dealloc, encode, decode.
     """
 
     def __init__(self, engine: wasmtime.Engine, wasm_path: Path) -> None:
@@ -125,12 +124,12 @@ class CoreWasmCodec(Codec):
     def call(self, direction: Direction, port_map: PortMap) -> OutputPortMap:
         """Call encode or decode using the core port-map ABI.
 
-        Input port-map entries may be ``bytes`` or ``CoreWasmRef``. When a
-        ``CoreWasmRef`` from another module is present, data is transferred
-        via single-copy (``ctypes.memmove``) directly into this module's
+        Input port-map entries may be bytes or CoreWasmRef. When a
+        CoreWasmRef from another module is present, data is transferred
+        via single-copy (ctypes.memmove) directly into this module's
         linear memory.
 
-        Output port-map entries are returned as ``CoreWasmRef`` (lazy
+        Output port-map entries are returned as CoreWasmRef (lazy
         parsing — bulk data stays in linear memory until materialized or
         single-copied to a downstream module).
         """
@@ -151,11 +150,7 @@ class CoreWasmCodec(Codec):
     def _write_input(
         self, port_map: Sequence[tuple[str, bytes | CoreWasmRef]]
     ) -> tuple[int, int]:
-        """Write a port-map into this module's linear memory.
-
-        Fast path when all values are bytes; single-copy path when any
-        value is a ``CoreWasmRef``.
-        """
+        """Write a port-map into this module's linear memory."""
         if any(isinstance(v, CoreWasmRef) for _, v in port_map):
             return self._write_input_with_refs(port_map)
         data = _serialize_port_map(cast(PortMap, port_map))
@@ -231,11 +226,7 @@ def _deserialize_port_map(data: bytes) -> PortMap:
 def _deserialize_port_map_lazy(
     codec: CoreWasmCodec, base_ptr: int, total_len: int
 ) -> list[tuple[str, bytes | CoreWasmRef]]:
-    """Parse port-map metadata from linear memory, returning CoreWasmRef entries.
-
-    Only reads metadata (entry count, port names, data lengths) from memory.
-    Bulk data remains in linear memory as ``CoreWasmRef`` entries.
-    """
+    """Parse port-map metadata from linear memory, returning CoreWasmRef entries."""
     store = codec.store
     mem = codec.memory
     pos = base_ptr
@@ -266,12 +257,7 @@ def _deserialize_port_map_lazy(
 def _copy_between_memories(
     src_ref: CoreWasmRef, dst_codec: CoreWasmCodec, dst_offset: int
 ) -> None:
-    """Copy data between two core wasm linear memories.
-
-    Uses ``ctypes.memmove`` via ``Memory.data_ptr()`` for a single-copy
-    transfer at native speed. Falls back to ``Memory.read`` +
-    ``Memory.write`` (two copies) if ``data_ptr()`` fails.
-    """
+    """Copy data between two core wasm linear memories via ctypes.memmove."""
     try:
         src_base = src_ref.codec.memory.data_ptr(src_ref.codec.store)
         dst_base = dst_codec.memory.data_ptr(dst_codec.store)
@@ -289,12 +275,7 @@ def _copy_between_memories(
 def _single_copy_transfer(
     src_ref: CoreWasmRef, dst_codec: CoreWasmCodec
 ) -> CoreWasmRef:
-    """Transfer data between core wasm linear memories, returning a ref in the
-    destination module.
-
-    Allocates space in the destination module's memory and copies the data
-    from the source module via ``_copy_between_memories``.
-    """
+    """Transfer data between core wasm linear memories, returning a destination ref."""
     dst_ptr = dst_codec._alloc(src_ref.length)
     _copy_between_memories(src_ref, dst_codec, dst_ptr)
     return CoreWasmRef(dst_codec, dst_ptr, src_ref.length)

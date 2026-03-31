@@ -147,11 +147,11 @@ vs 9,113 MB/s (Rust) at the same Wasm binary and buffer size.
 
 A Rust crate (`chonkle-wasmtime`) using [PyO3](https://pyo3.rs/) and
 [maturin](https://github.com/PyO3/maturin) wraps wasmtime-rs's component model
-APIs directly. Since `wit/codec.wit` is fixed, `wasmtime::component::bindgen!`
+APIs directly. Since `codec/wit/codec.wit` is fixed, `wasmtime::component::bindgen!`
 generates fully typed Rust bindings at compile time:
 
 ```rust
-wasmtime::component::bindgen!({ path: "wit/codec.wit", world: "codec" });
+wasmtime::component::bindgen!({ path: "codec/wit/codec.wit", world: "codec" });
 ```
 
 The generated `Lower`/`Lift` impls handle `port-map` with one `memory.write()`

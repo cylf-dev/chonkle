@@ -19,10 +19,10 @@ def resolve_uri(uri: str) -> Iterator[Path]:
 
     Dispatches based on URI scheme:
 
-    - ``file://`` — yields the path directly; no temp dir created
-    - ``https://`` — downloads to a temp dir, yields the path, cleans up on exit
-    - ``oci://`` — pulls to a temp dir, yields the path, cleans up on exit
-    - ``http://`` — rejected; use HTTPS
+    - file:// — yields the path directly; no temp dir created
+    - https:// — downloads to a temp dir, yields the path, cleans up on exit
+    - oci:// — pulls to a temp dir, yields the path, cleans up on exit
+    - http:// — rejected; use HTTPS
 
     The caller is responsible for installing the yielded file into the codec
     store before the context exits if durable storage is needed.
@@ -31,10 +31,10 @@ def resolve_uri(uri: str) -> Iterator[Path]:
         uri: The codec URI to resolve.
 
     Yields:
-        The absolute path to a local ``.wasm`` file.
+        The absolute path to a local .wasm file.
 
     Raises:
-        ValueError: If the scheme is ``http://``, unsupported, or absent.
+        ValueError: If the scheme is http://, unsupported, or absent.
     """
     parsed = urllib.parse.urlparse(uri)
 
@@ -62,18 +62,7 @@ def resolve_uri(uri: str) -> Iterator[Path]:
 
 
 def _download_url_to(url: str, dest: Path, dest_dir: Path) -> None:
-    """Download ``url`` to ``dest`` atomically via a temp file in ``dest_dir``.
-
-    Writes to a temporary file first, then replaces ``dest`` on success
-    so that a partial download never leaves a corrupt file at the target
-    path. The temporary file is removed on any exception.
-
-    Args:
-        url: The HTTPS URL to fetch.
-        dest: The final destination path for the downloaded file.
-        dest_dir: Directory in which to create the temporary file
-            during the download.
-    """
+    """Download a URL to dest atomically via a temp file."""
     request = urllib.request.Request(url)  # noqa: S310
     tmp_fd, tmp_path_str = tempfile.mkstemp(dir=dest_dir)
     tmp = Path(tmp_path_str)
@@ -87,18 +76,7 @@ def _download_url_to(url: str, dest: Path, dest_dir: Path) -> None:
 
 
 def _download_https(url: str, dest_dir: Path) -> Path:
-    """Download a ``.wasm`` file from HTTPS into *dest_dir*.
-
-    Signatures are embedded in the ``.wasm`` binary as a
-    ``chonkle:signature`` custom section — no sidecar download is needed.
-
-    Args:
-        url: The HTTPS URL of the ``.wasm`` file.
-        dest_dir: Directory to download into.
-
-    Returns:
-        The path to the downloaded ``.wasm`` file inside *dest_dir*.
-    """
+    """Download a .wasm file from HTTPS into dest_dir."""
     filename = PurePosixPath(urllib.parse.urlparse(url).path).name or "module.wasm"
     dest = dest_dir / filename
     _download_url_to(url, dest, dest_dir)
@@ -106,23 +84,7 @@ def _download_https(url: str, dest_dir: Path) -> Path:
 
 
 def _download_oci(uri: str, dest_dir: Path) -> Path:
-    """Pull a ``.wasm`` codec from an OCI registry into *dest_dir*.
-
-    The artifact must contain a ``.wasm`` layer. Signatures are embedded
-    in the binary as a ``chonkle:signature`` custom section — no sidecar
-    layer is required.
-
-    Args:
-        uri: OCI reference with the ``oci://`` scheme prefix, e.g.
-            ``oci://ghcr.io/cylf-dev/tiff-predictor-2-c:v0.1.0``.
-        dest_dir: Directory to pull into.
-
-    Returns:
-        The path to the pulled ``.wasm`` file inside *dest_dir*.
-
-    Raises:
-        ValueError: If the OCI artifact contains no ``.wasm`` file.
-    """
+    """Pull a .wasm codec from an OCI registry into dest_dir."""
     ref = uri.removeprefix("oci://")
     client = oras.client.OrasClient()
 

@@ -42,7 +42,7 @@ interface transform {
 }
 ```
 
-Declares a named set of functions and types. This is the shared contract: every codec component in this project is compiled against the same `wit/codec.wit`, which means every one of them implements the *same* `transform` interface — not just functions that happen to look the same, but functions explicitly identified by name and package. The host uses the same file to know what to call. That shared identity is what lets the toolchain verify compatibility and lets the host treat all codecs uniformly.
+Declares a named set of functions and types. This is the shared contract: every codec component in this project is compiled against the same `codec/wit/codec.wit`, which means every one of them implements the *same* `transform` interface — not just functions that happen to look the same, but functions explicitly identified by name and package. The host uses the same file to know what to call. That shared identity is what lets the toolchain verify compatibility and lets the host treat all codecs uniformly.
 
 ### `world`
 

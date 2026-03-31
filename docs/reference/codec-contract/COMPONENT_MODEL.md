@@ -4,7 +4,7 @@ Component Model codecs implement the `chonkle:codec/transform@0.1.0` WIT interfa
 
 ## WIT interface
 
-A component must export the `chonkle:codec/transform` interface. The full WIT definition (from `wit/codec.wit`):
+A component must export the `chonkle:codec/transform` interface. The full WIT definition (from `codec/wit/codec.wit`):
 
 ```wit
 package chonkle:codec@0.1.0;

@@ -1,8 +1,8 @@
 """Codec signatures: types, detection, and Wasm custom-section I/O.
 
-Pure-Python implementation — no wasmtime or instantiation needed.  Works with
-both core Wasm (version ``01 00 00 00``) and Component Model (version
-``0d 00 01 00``) binaries.
+Pure-Python implementation — no wasmtime or instantiation needed. Works with
+both core Wasm (version 01 00 00 00) and Component Model (version
+0d 00 01 00) binaries.
 """
 
 from __future__ import annotations
@@ -36,10 +36,7 @@ class PortDescriptor:
 
 @dataclass(frozen=True)
 class Signature:
-    """Structured codec signature.
-
-    Replaces the raw ``dict[str, Any]`` signature format with typed fields.
-    """
+    """Typed representation of a codec's input and output port declarations."""
 
     codec_id: str
     implementation: str
@@ -48,7 +45,7 @@ class Signature:
 
     @classmethod
     def from_wasm(cls, wasm_path: str | Path) -> Signature:
-        """Construct a Signature from a ``.wasm`` file's embedded custom section."""
+        """Construct a Signature from a .wasm file's embedded custom section."""
         return cls.from_dict(read_signature(wasm_path))
 
     @classmethod
@@ -100,10 +97,7 @@ class Signature:
 
 
 def _read_leb128(data: bytes, offset: int) -> tuple[int, int]:
-    """Decode an unsigned LEB128 value starting at *offset*.
-
-    Returns (value, new_offset).
-    """
+    """Decode an unsigned LEB128 value, returning (value, new_offset)."""
     result = 0
     shift = 0
     while True:
@@ -131,25 +125,25 @@ def _encode_leb128(value: int) -> bytes:
 
 
 def read_signature(wasm_path: str | Path) -> dict[str, Any]:
-    """Read the ``chonkle:signature`` custom section from a ``.wasm`` file.
+    """Read the chonkle:signature custom section from a .wasm file.
 
     Args:
-        wasm_path: Path to the ``.wasm`` binary.
+        wasm_path: Path to the .wasm binary.
 
     Returns:
         The parsed signature dict.
 
     Raises:
-        FileNotFoundError: The ``.wasm`` file does not exist.
+        FileNotFoundError: The .wasm file does not exist.
         ValueError: The file is not a valid Wasm binary or contains no
-            ``chonkle:signature`` section.
+            chonkle:signature section.
     """
     data = Path(wasm_path).read_bytes()
     return read_signature_bytes(data, context=str(wasm_path))
 
 
 def read_signature_bytes(data: bytes, *, context: str = "<bytes>") -> dict[str, Any]:
-    """Read the ``chonkle:signature`` custom section from in-memory Wasm bytes.
+    """Read the chonkle:signature custom section from in-memory Wasm bytes.
 
     Args:
         data: Raw Wasm binary content.
@@ -159,7 +153,7 @@ def read_signature_bytes(data: bytes, *, context: str = "<bytes>") -> dict[str, 
         The parsed signature dict.
 
     Raises:
-        ValueError: Not a valid Wasm binary or no ``chonkle:signature`` section.
+        ValueError: Not a valid Wasm binary or no chonkle:signature section.
     """
     if len(data) < _HEADER_SIZE or data[:4] != _WASM_MAGIC:
         msg = f"Not a valid Wasm binary: {context}"
@@ -189,9 +183,9 @@ def read_signature_bytes(data: bytes, *, context: str = "<bytes>") -> dict[str, 
 
 
 def embed_signature(wasm_bytes: bytes, signature: dict[str, Any]) -> bytes:
-    """Append a ``chonkle:signature`` custom section to Wasm bytes.
+    """Append a chonkle:signature custom section to Wasm bytes.
 
-    If a ``chonkle:signature`` section already exists, it is replaced.
+    If a chonkle:signature section already exists, it is replaced.
 
     Args:
         wasm_bytes: Raw Wasm binary content.
@@ -201,7 +195,7 @@ def embed_signature(wasm_bytes: bytes, signature: dict[str, Any]) -> bytes:
         New Wasm bytes with the custom section appended.
 
     Raises:
-        ValueError: *wasm_bytes* is not a valid Wasm binary.
+        ValueError: wasm_bytes is not a valid Wasm binary.
     """
     if len(wasm_bytes) < _HEADER_SIZE or wasm_bytes[:4] != _WASM_MAGIC:
         msg = "Not a valid Wasm binary"
@@ -249,18 +243,18 @@ def _build_custom_section(name: str, payload: bytes) -> bytes:
 
 
 def detect_codec_type(wasm_path: Path) -> Backend:
-    """Detect whether a ``.wasm`` file is core or component model.
+    """Detect whether a .wasm file is core or component model.
 
     Reads the 8-byte header (magic + version) to distinguish:
 
-    - ``0d 00 01 00`` → ``"component"`` (Component Model)
-    - ``01 00 00 00`` → ``"core"`` (Core Wasm)
+    - 0d 00 01 00 → "component" (Component Model)
+    - 01 00 00 00 → "core" (Core Wasm)
 
     Args:
-        wasm_path: Path to the ``.wasm`` binary.
+        wasm_path: Path to the .wasm binary.
 
     Returns:
-        ``"component"`` or ``"core"``.
+        "component" or "core".
 
     Raises:
         ValueError: Not a valid Wasm binary or unrecognized version.

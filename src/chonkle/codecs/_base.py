@@ -35,7 +35,7 @@ class Codec(ABC):
     @property
     @abstractmethod
     def codec_type(self) -> Backend:
-        """Backend type: ``"component"``, ``"core"``, or ``"native"``."""
+        """Backend type: "component", "core", or "native"."""
         ...
 
     @property
@@ -61,8 +61,8 @@ class Codec(ABC):
     ) -> list[tuple[str, bytes | Any]]:
         """Execute encode or decode and return the output port-map.
 
-        Input and return entries may contain ``bytes`` values (all backends) or
-        ``CoreWasmRef`` deferred references (core wasm backend only).
-        See ``OutputPortMap`` type alias.
+        Input and return entries may contain bytes values (all backends) or
+        CoreWasmRef deferred references (core wasm backend only).
+        See OutputPortMap type alias.
         """
         ...
