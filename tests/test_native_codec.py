@@ -22,7 +22,6 @@ class TestNativeCodecInstantiation:
         codec = NativeCodec("zlib")
         sig = codec.signature()
         assert sig.codec_id == "zlib"
-        assert sig.data_format == "bytes"
         assert "bytes" in sig.inputs
 
     def test_codec_type_is_native(self) -> None:
@@ -89,6 +88,69 @@ class TestNativeCodecBytesFormat:
         decoded = codec.call("decode", [("bytes", encoded[0][1])])
         assert decoded[0][1] == data
 
+    def test_adler32_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("adler32")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_base64_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("base64")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_crc32_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("crc32")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_crc32c_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("crc32c")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_fletcher32_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("fletcher32")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_jenkins_lookup3_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("jenkins_lookup3")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_jenkins_lookup3_with_initval(self) -> None:
+        codec = NativeCodec("jenkins_lookup3")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data), ("initval", b"42")])
+        decoded = codec.call("decode", [("bytes", encoded[0][1]), ("initval", b"42")])
+        assert decoded[0][1] == data
+
+    def test_pickle_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("pickle")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data)])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
+    def test_pickle_with_protocol(self) -> None:
+        codec = NativeCodec("pickle")
+        data = bytes(range(256)) * 4
+        encoded = codec.call("encode", [("bytes", data), ("protocol", b"4")])
+        decoded = codec.call("decode", [("bytes", encoded[0][1])])
+        assert decoded[0][1] == data
+
 
 class TestNativeCodecNdarrayFormat:
     """Test ndarray-format native codecs (delta, shuffle)."""
@@ -109,6 +171,113 @@ class TestNativeCodecNdarrayFormat:
         encoded = codec.call("encode", [("bytes", data), ("dtype", b'"<f4"')])
         decoded = codec.call("decode", [("bytes", encoded[0][1]), ("dtype", b'"<f4"')])
         result = np.frombuffer(decoded[0][1], dtype="<f4")
+        np.testing.assert_array_equal(result, arr)
+
+    def test_bitround_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("bitround")
+        arr = np.array([1.23456789, 2.3456789, 3.456789], dtype="<f4")
+        data = arr.tobytes()
+        encoded = codec.call(
+            "encode", [("bytes", data), ("keepbits", b"10"), ("dtype", b'"<f4"')]
+        )
+        decoded = codec.call(
+            "decode",
+            [("bytes", encoded[0][1]), ("keepbits", b"10"), ("dtype", b'"<f4"')],
+        )
+        result = np.frombuffer(decoded[0][1], dtype="<f4")
+        np.testing.assert_allclose(result, arr, atol=0.01)
+
+    def test_fixedscaleoffset_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("fixedscaleoffset")
+        arr = np.array([10.0, 20.0, 30.0], dtype="<f4")
+        data = arr.tobytes()
+        encoded = codec.call(
+            "encode",
+            [("bytes", data), ("offset", b"0"), ("scale", b"10"), ("dtype", b'"<f4"')],
+        )
+        decoded = codec.call(
+            "decode",
+            [
+                ("bytes", encoded[0][1]),
+                ("offset", b"0"),
+                ("scale", b"10"),
+                ("dtype", b'"<f4"'),
+            ],
+        )
+        result = np.frombuffer(decoded[0][1], dtype="<f4")
+        np.testing.assert_allclose(result, arr)
+
+    def test_quantize_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("quantize")
+        arr = np.array([1.23456789, 2.3456789, 3.456789], dtype="<f4")
+        data = arr.tobytes()
+        encoded = codec.call(
+            "encode", [("bytes", data), ("digits", b"3"), ("dtype", b'"<f4"')]
+        )
+        decoded = codec.call(
+            "decode", [("bytes", encoded[0][1]), ("digits", b"3"), ("dtype", b'"<f4"')]
+        )
+        result = np.frombuffer(decoded[0][1], dtype="<f4")
+        np.testing.assert_allclose(result, arr, atol=0.01)
+
+    def test_astype_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("astype")
+        arr = np.array([1.5, 2.5, 3.5], dtype="<f8")
+        data = arr.tobytes()
+        # encode_dtype = output of encode (f4), decode_dtype = output of decode (f8)
+        encoded = codec.call(
+            "encode",
+            [("bytes", data), ("encode_dtype", b'"<f4"'), ("decode_dtype", b'"<f8"')],
+        )
+        assert len(encoded[0][1]) == 3 * 4  # 3 float32 values
+        decoded = codec.call(
+            "decode",
+            [
+                ("bytes", encoded[0][1]),
+                ("encode_dtype", b'"<f4"'),
+                ("decode_dtype", b'"<f8"'),
+            ],
+        )
+        result = np.frombuffer(decoded[0][1], dtype="<f8")
+        np.testing.assert_allclose(result, arr, atol=0.01)
+
+    def test_packbits_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("packbits")
+        arr = np.array(
+            [True, False, True, True, False, True, False, False], dtype="bool"
+        )
+        data = arr.tobytes()
+        encoded = codec.call("encode", [("bytes", data), ("encode_dtype", b'"bool"')])
+        decoded = codec.call(
+            "decode", [("bytes", encoded[0][1]), ("decode_dtype", b'"uint8"')]
+        )
+        result = np.frombuffer(decoded[0][1], dtype="bool")
+        np.testing.assert_array_equal(result, arr)
+
+    def test_categorize_encode_decode_roundtrip(self) -> None:
+        codec = NativeCodec("categorize")
+        arr = np.array(["cat", "dog", "bird", "cat"], dtype="<U4")
+        data = arr.tobytes()
+        labels = b'["cat", "dog", "bird"]'
+        encoded = codec.call(
+            "encode",
+            [
+                ("bytes", data),
+                ("labels", labels),
+                ("dtype", b'"<U4"'),
+                ("astype", b'"uint8"'),
+            ],
+        )
+        decoded = codec.call(
+            "decode",
+            [
+                ("bytes", encoded[0][1]),
+                ("labels", labels),
+                ("dtype", b'"<U4"'),
+                ("astype", b'"uint8"'),
+            ],
+        )
+        result = np.frombuffer(decoded[0][1], dtype="<U4")
         np.testing.assert_array_equal(result, arr)
 
     def test_ndarray_missing_dtype_raises(self) -> None:
@@ -161,13 +330,17 @@ def _make_prepared(
     direction: Direction,
     codecs: dict[str, Codec],
 ) -> PreparedPipeline:
-    """Build a PreparedPipeline computing encode_only_inputs and output_ports."""
+    """Build a PreparedPipeline computing encode/decode_only_inputs and output_ports."""
     return PreparedPipeline(
         pipeline=pipeline,
         direction=direction,
         codecs=codecs,
         encode_only_inputs={
             name: frozenset(codecs[name].signature().encode_only_inputs())
+            for name in pipeline.steps
+        },
+        decode_only_inputs={
+            name: frozenset(codecs[name].signature().decode_only_inputs())
             for name in pipeline.steps
         },
         output_ports={

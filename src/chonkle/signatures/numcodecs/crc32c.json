@@ -1,15 +1,15 @@
 {
-  "codec_id": "lz4",
-  "implementation": "numcodecs.lz4",
+  "codec_id": "crc32c",
+  "implementation": "numcodecs.crc32c",
   "inputs": {
     "bytes": {"type": "bytes", "required": true},
-    "acceleration": {"type": "int", "required": false, "default": 1, "encode_only": true}
+    "location": {"type": "string", "required": false}
   },
   "outputs": {
     "bytes": {"type": "bytes"}
   },
   "native": {
-    "constructor_ports": ["acceleration"],
+    "constructor_ports": ["location"],
     "encode": {"mode": "bytes"},
     "decode": {"mode": "bytes"}
   }

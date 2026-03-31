@@ -1,15 +1,17 @@
 {
-  "codec_id": "delta",
-  "implementation": "numcodecs.delta",
+  "codec_id": "fixedscaleoffset",
+  "implementation": "numcodecs.fixedscaleoffset",
   "inputs": {
     "bytes": {"type": "bytes", "required": true},
+    "offset": {"type": "number", "required": true},
+    "scale": {"type": "number", "required": true},
     "dtype": {"type": "string", "required": true}
   },
   "outputs": {
     "bytes": {"type": "bytes"}
   },
   "native": {
-    "constructor_ports": ["dtype"],
+    "constructor_ports": ["offset", "scale", "dtype"],
     "encode": {"mode": "ndarray", "dtype_port": "dtype"},
     "decode": {"mode": "ndarray", "dtype_port": "dtype"}
   }

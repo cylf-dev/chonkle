@@ -1,7 +1,6 @@
 {
   "codec_id": "blosc",
   "implementation": "numcodecs.blosc",
-  "data_format": "bytes",
   "inputs": {
     "bytes": {"type": "bytes", "required": true},
     "cname": {"type": "string", "required": false, "default": "lz4", "encode_only": true},
@@ -10,5 +9,10 @@
   },
   "outputs": {
     "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["cname", "clevel", "shuffle"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
   }
 }

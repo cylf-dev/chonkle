@@ -1,12 +1,16 @@
 {
   "codec_id": "bz2",
   "implementation": "numcodecs.bz2",
-  "data_format": "bytes",
   "inputs": {
     "bytes": {"type": "bytes", "required": true},
     "level": {"type": "int", "required": false, "default": 9, "encode_only": true}
   },
   "outputs": {
     "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["level"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
   }
 }

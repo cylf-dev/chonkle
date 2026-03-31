@@ -32,22 +32,28 @@ class NativeCodec(Codec):
     imported lazily — users who only use wasm codecs do not need it
     installed.
 
-    The ``data_format`` field in the signature controls the calling
-    convention:
+    The ``native`` block in the signature JSON controls the calling
+    convention per direction:
 
-    - ``"bytes"``: the ``bytes`` port is passed directly to
+    - ``mode: "bytes"``: the ``bytes`` port is passed directly to
       ``codec.encode()`` / ``codec.decode()``.
-    - ``"ndarray"``: the ``bytes`` port is interpreted as a raw buffer,
-      converted to a numpy ndarray using the ``dtype`` port, processed,
-      and converted back to bytes.
+    - ``mode: "ndarray"``: the ``bytes`` port is interpreted as a raw
+      buffer, converted to a numpy ndarray using the dtype from the
+      port named by ``dtype_port``, processed, and converted back to
+      bytes.
 
-    Non-``bytes`` ports in the input port-map (excluding ``dtype``) are
-    JSON-decoded and passed as constructor kwargs to the numcodecs codec.
+    ``constructor_ports`` lists input port names whose JSON-decoded
+    values are passed as kwargs to the numcodecs codec constructor.
     """
 
     def __init__(self, codec_id: str) -> None:
-        self._sig = Signature.from_json(_native_signature_path(codec_id))
-        self._data_format: str = self._sig.data_format or "bytes"
+        sig_path = _native_signature_path(codec_id)
+        raw = json.loads(sig_path.read_text())
+        self._sig = Signature.from_dict(raw)
+        if "native" not in raw:
+            msg = f"Signature for {codec_id!r} missing required 'native' block"
+            raise ValueError(msg)
+        self._native: dict[str, Any] = raw["native"]
         self._numcodecs = _import_numcodecs()
 
     @property
@@ -70,29 +76,26 @@ class NativeCodec(Codec):
         pm = dict(port_map)
         data = pm.pop("bytes")
 
-        # All remaining ports are JSON-decoded kwargs for the codec constructor.
-        # For ndarray codecs, pop dtype — it controls buffer conversion and
-        # may or may not be a constructor arg (Delta accepts it, Shuffle does not).
-        kwargs = {k: json.loads(v) for k, v in pm.items()}
-        dtype_str: str | None = None
-        if self._data_format == "ndarray":
-            dtype_str = kwargs.pop("dtype", None)
+        all_ports = {k: json.loads(v) for k, v in pm.items()}
 
-        codec_obj = self._build_codec(kwargs, dtype_str)
+        constructor_kwargs = {
+            name: all_ports[name]
+            for name in self._native["constructor_ports"]
+            if name in all_ports
+        }
+        codec_obj = self._build_codec(constructor_kwargs)
 
-        if self._data_format == "ndarray":
+        recipe = self._native[direction]
+        if recipe["mode"] == "ndarray":
+            dtype_str = all_ports[recipe["dtype_port"]]
             return self._call_ndarray(codec_obj, direction, data, dtype_str)
         return self._call_bytes(codec_obj, direction, data)
 
-    def _build_codec(self, kwargs: dict[str, Any], dtype_str: str | None) -> Any:
-        """Instantiate the numcodecs codec, trying dtype as a constructor arg."""
-        config = {"id": self._sig.codec_id, **kwargs}
-        if dtype_str is not None:
-            try:
-                return self._numcodecs.get_codec({**config, "dtype": dtype_str})
-            except TypeError:
-                pass
-        return self._numcodecs.get_codec(config)
+    def _build_codec(self, constructor_kwargs: dict[str, Any]) -> Any:
+        """Instantiate the numcodecs codec from constructor kwargs."""
+        return self._numcodecs.get_codec(
+            {"id": self._sig.codec_id, **constructor_kwargs}
+        )
 
     @staticmethod
     def _call_bytes(codec: Any, direction: Direction, data: bytes) -> PortMap:
@@ -101,12 +104,9 @@ class NativeCodec(Codec):
 
     @staticmethod
     def _call_ndarray(
-        codec: Any, direction: Direction, data: bytes, dtype_str: str | None
+        codec: Any, direction: Direction, data: bytes, dtype_str: str
     ) -> PortMap:
         np = _import_numpy()
-        if dtype_str is None:
-            msg = "ndarray-format native codec requires a 'dtype' port"
-            raise ValueError(msg)
         dtype = np.dtype(dtype_str)
         arr = np.frombuffer(data, dtype=dtype)
         result = codec.encode(arr) if direction == "encode" else codec.decode(arr)

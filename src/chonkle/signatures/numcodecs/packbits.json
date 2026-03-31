@@ -1,0 +1,17 @@
+{
+  "codec_id": "packbits",
+  "implementation": "numcodecs.packbits",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "encode_dtype": {"type": "string", "required": false, "default": "bool", "encode_only": true},
+    "decode_dtype": {"type": "string", "required": false, "default": "uint8", "decode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": [],
+    "encode": {"mode": "ndarray", "dtype_port": "encode_dtype"},
+    "decode": {"mode": "ndarray", "dtype_port": "decode_dtype"}
+  }
+}

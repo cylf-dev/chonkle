@@ -14,11 +14,13 @@ For pipelines, the `direction` field makes the decode-first convention explicit:
 
 ### No `decode_only` property
 
-The signature model has `encode_only` to mark inputs active only during encoding, but no `decode_only` counterpart. At least two codecs in the catalog have inputs meaningful only during decode:
+The protospec signature model has `encode_only` to mark inputs active only during encoding, but no `decode_only` counterpart. At least two codecs in the catalog have inputs meaningful only during decode:
 
 - **parquet-page-v2-split**: `rep_length` and `def_length` tell the decoder where to split the byte stream into three output streams. In the encode direction these lengths are not needed — they follow from the sizes of the three input buffers. The signature does not mark them as decode-only, and the model has no way to express this.
 
 - **fletcher32, crc32c, crc32**: `error_on_fail` controls whether to raise on checksum mismatch during decode. It is meaningless during encode (which unconditionally appends the checksum). It is not marked `encode_only` in the catalog — that would be wrong, it is the opposite — and the gap is unaddressed.
+
+Chonkle implements `decode_only` as the symmetric counterpart to `encode_only`. It is used by native codecs like packbits, where `encode_dtype` is encode-only and `decode_dtype` is decode-only. The executor omits `decode_only` ports from the port-map during encode, mirroring the existing `encode_only` handling during decode. See the `decode_only` divergence in [PIPELINE_SCHEMA.md](../PIPELINE_SCHEMA.md#decode_only-on-codec-signature-and-pipeline-inputs).
 
 ### No variable-arity outputs
 

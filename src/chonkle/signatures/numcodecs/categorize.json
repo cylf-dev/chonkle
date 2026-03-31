@@ -1,0 +1,18 @@
+{
+  "codec_id": "categorize",
+  "implementation": "numcodecs.categorize",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "labels": {"type": "list", "required": true},
+    "dtype": {"type": "string", "required": true},
+    "astype": {"type": "string", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["labels", "dtype", "astype"],
+    "encode": {"mode": "ndarray", "dtype_port": "dtype"},
+    "decode": {"mode": "ndarray", "dtype_port": "astype"}
+  }
+}

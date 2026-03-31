@@ -23,6 +23,7 @@ class InputDescriptor:
 
     type: str = ""
     encode_only: bool = False
+    decode_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,7 +145,9 @@ class Pipeline:
             raise ValueError(msg)
         inputs = {
             k: InputDescriptor(
-                type=v.get("type", ""), encode_only=v.get("encode_only", False)
+                type=v.get("type", ""),
+                encode_only=v.get("encode_only", False),
+                decode_only=v.get("decode_only", False),
             )
             for k, v in data.get("inputs", {}).items()
         }
@@ -194,6 +197,7 @@ class PreparedPipeline:
     direction: Direction
     codecs: Mapping[str, Codec]
     encode_only_inputs: Mapping[str, frozenset[str]]  # step_name -> encode_only ports
+    decode_only_inputs: Mapping[str, frozenset[str]]  # step_name -> decode_only ports
     output_ports: Mapping[str, tuple[str, ...]]  # step_name -> output port names
 
 
@@ -238,10 +242,12 @@ def prepare(
     _validate_codec_signatures(parsed, codecs, direction)
 
     encode_only_inputs: dict[str, frozenset[str]] = {}
+    decode_only_inputs: dict[str, frozenset[str]] = {}
     output_ports: dict[str, tuple[str, ...]] = {}
     for step_name, codec in codecs.items():
         sig = codec.signature()
         encode_only_inputs[step_name] = frozenset(sig.encode_only_inputs())
+        decode_only_inputs[step_name] = frozenset(sig.decode_only_inputs())
         output_ports[step_name] = tuple(sig.outputs.keys())
 
     return PreparedPipeline(
@@ -249,6 +255,7 @@ def prepare(
         direction=direction,
         codecs=codecs,
         encode_only_inputs=encode_only_inputs,
+        decode_only_inputs=decode_only_inputs,
         output_ports=output_ports,
     )
 
@@ -493,15 +500,20 @@ def _validate_step_signature(
         )
 
         encode_only_ports = signature.encode_only_inputs()
+        decode_only_ports = signature.decode_only_inputs()
 
         if ctx.direction == "decode":
             valid_inputs = {
                 name for name, desc in sig_inputs.items() if not desc.encode_only
             }
+        elif ctx.direction == "encode":
+            valid_inputs = {
+                name for name, desc in sig_inputs.items() if not desc.decode_only
+            }
         else:
             valid_inputs = set(sig_inputs.keys())
 
-        active_inputs = set(step.inputs.keys()) - encode_only_ports
+        active_inputs = set(step.inputs.keys()) - encode_only_ports - decode_only_ports
         unknown = active_inputs - valid_inputs
         if unknown:
             errors.append(

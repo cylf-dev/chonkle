@@ -42,7 +42,8 @@ def run(
         required = [
             name
             for name, desc in pipeline.inputs.items()
-            if direction == "encode" or not desc.encode_only
+            if (direction == "encode" or not desc.encode_only)
+            and (direction == "decode" or not desc.decode_only)
         ]
         for name in required:
             if name not in inputs:
@@ -78,7 +79,8 @@ def _execute_forward(
     active_inputs = [
         name
         for name, desc in pipeline.inputs.items()
-        if direction == "encode" or not desc.encode_only
+        if (direction == "encode" or not desc.encode_only)
+        and (direction == "decode" or not desc.decode_only)
     ]
     for name in active_inputs:
         value_store[f"input.{name}"] = inputs[name]
@@ -86,7 +88,10 @@ def _execute_forward(
     for step_name, step in pipeline.steps.items():
         codec = prepared.codecs[step_name]
         encode_only = prepared.encode_only_inputs[step_name]
-        port_map = _forward_port_map(step, value_store, direction, encode_only, codec)
+        decode_only = prepared.decode_only_inputs[step_name]
+        port_map = _forward_port_map(
+            step, value_store, direction, encode_only, decode_only, codec
+        )
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
@@ -118,22 +123,31 @@ def _execute_inverted(
     for step_name, step in reversed(pipeline.steps.items()):
         codec = prepared.codecs[step_name]
         encode_only = prepared.encode_only_inputs[step_name]
+        decode_only = prepared.decode_only_inputs[step_name]
         output_ports = prepared.output_ports[step_name]
         port_map = _inverted_port_map(
-            step_name, step, value_store, direction, output_ports, encode_only, codec
+            step_name,
+            step,
+            value_store,
+            direction,
+            output_ports,
+            encode_only,
+            decode_only,
+            codec,
         )
         log.debug(
             "step %r: calling %s with %d ports", step_name, direction, len(port_map)
         )
         output_map = codec.call(direction, port_map)
         for port_name, value in output_map:
-            if port_name in step.inputs and port_name not in encode_only:
+            if port_name in step.inputs and port_name not in encode_only | decode_only:
                 value_store[str(step.inputs[port_name])] = value
 
     return {
         name: _materialize(value_store[f"input.{name}"])
         for name, desc in pipeline.inputs.items()
-        if direction == "encode" or not desc.encode_only
+        if (direction == "encode" or not desc.encode_only)
+        and (direction == "decode" or not desc.decode_only)
     }
 
 
@@ -142,11 +156,13 @@ def _forward_port_map(
     value_store: dict[str, bytes | CoreWasmRef],
     direction: str,
     encode_only_inputs: frozenset[str],
+    decode_only_inputs: frozenset[str],
     codec: object,
 ) -> OutputPortMap:
     """Build the port-map for a step in forward execution.
 
-    Iterates step.inputs, omitting encode_only ports when direction is decode.
+    Iterates step.inputs, omitting encode_only ports when direction is decode
+    and decode_only ports when direction is encode.
     ``CoreWasmRef`` values are passed through for core wasm codecs (enabling
     single-copy transfer) and materialized to bytes for other backends.
     """
@@ -154,6 +170,8 @@ def _forward_port_map(
     port_map: OutputPortMap = []
     for port_name, ref in step.inputs.items():
         if direction == "decode" and port_name in encode_only_inputs:
+            continue
+        if direction == "encode" and port_name in decode_only_inputs:
             continue
         value = value_store[str(ref)]
         if isinstance(value, CoreWasmRef) and not is_core:
@@ -169,15 +187,16 @@ def _inverted_port_map(
     direction: str,
     output_ports: tuple[str, ...],
     encode_only_inputs: frozenset[str],
+    decode_only_inputs: frozenset[str],
     codec: object,
 ) -> OutputPortMap:
     """Build the port-map for a step in inverted execution.
 
     The step's forward-direction outputs (from signature) become its
-    inverted-direction inputs. Inputs wired from constants (non-encode_only)
+    inverted-direction inputs. Inputs wired from constants (not direction-only)
     are always included. encode_only_inputs are appended only when calling
-    encode. ``CoreWasmRef`` values are passed through for core wasm codecs
-    and materialized for other backends.
+    encode; decode_only_inputs only when calling decode. ``CoreWasmRef`` values
+    are passed through for core wasm codecs and materialized for other backends.
     """
     is_core = isinstance(codec, CoreWasmCodec)
     port_map: OutputPortMap = []
@@ -187,13 +206,20 @@ def _inverted_port_map(
             if isinstance(val, CoreWasmRef) and not is_core:
                 val = val.materialize()
             port_map.append((port_name, val))
+    direction_only = encode_only_inputs | decode_only_inputs
     for port_name, ref in step.inputs.items():
-        if ref.kind == "constant" and port_name not in encode_only_inputs:
+        if ref.kind == "constant" and port_name not in direction_only:
             port_map.append((port_name, value_store[str(ref)]))
-    if direction == "encode":
-        for port_name in encode_only_inputs:
-            if port_name in step.inputs:
-                port_map.append((port_name, value_store[str(step.inputs[port_name])]))
+    active_dir_ports = (
+        encode_only_inputs
+        if direction == "encode"
+        else decode_only_inputs
+        if direction == "decode"
+        else frozenset()
+    )
+    for port_name in active_dir_ports:
+        if port_name in step.inputs:
+            port_map.append((port_name, value_store[str(step.inputs[port_name])]))
     return port_map
 
 

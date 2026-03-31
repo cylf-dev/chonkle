@@ -38,13 +38,14 @@ Fields:
 
 - `codec_id` — logical codec identifier (e.g. `"zlib"`, `"tiff-predictor-2"`)
 - `implementation` — identifies the specific build or project that produced the codec (e.g. `"zlib-rs"`, `"numcodecs.zlib"`)
-- `inputs` — map of input port descriptors. Each has `type` (required), and optional `required` (default `true`), `default`, and `encode_only` (default `false`).
+- `inputs` — map of input port descriptors. Each has `type` (required), and optional `required` (default `true`), `default`, `encode_only` (default `false`), and `decode_only` (default `false`).
 - `outputs` — map of output port descriptors. Each has `type`.
-- `data_format` (native codecs only) — `"bytes"` or `"ndarray"`, controls the calling convention. See [NATIVE.md](NATIVE.md).
+
+Native codec signatures also include a `native` block that controls the calling convention (constructor args, bytes vs. ndarray mode, per-direction dtype). See [NATIVE.md](NATIVE.md).
 
 ### Validation
 
 The host validates signatures during pipeline preparation:
 
 - Both inputs and outputs use **subset checks** — a step need not wire every port the codec declares. For example, a codec may declare an optional `level` input with a default value; a pipeline step that is happy with the default simply omits it from its `inputs`.
-- Input validation is **direction-aware**: when running in decode direction, ports marked `encode_only: true` are ignored during validation and omitted from the port-map passed to the codec
+- Input validation is **direction-aware**: ports marked `encode_only: true` are excluded during decode; ports marked `decode_only: true` are excluded during encode. Both are omitted from validation and from the port-map passed to the codec in the excluded direction.

@@ -82,6 +82,10 @@ def _prepared(
         name: frozenset(codecs[name].signature().encode_only_inputs())
         for name in pipeline.steps
     }
+    decode_only_inputs = {
+        name: frozenset(codecs[name].signature().decode_only_inputs())
+        for name in pipeline.steps
+    }
     output_ports = {
         name: tuple(codecs[name].signature().outputs.keys()) for name in pipeline.steps
     }
@@ -90,6 +94,7 @@ def _prepared(
         direction=direction,
         codecs=codecs,
         encode_only_inputs=encode_only_inputs,
+        decode_only_inputs=decode_only_inputs,
         output_ports=output_ports,
     )
 

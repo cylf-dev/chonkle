@@ -31,6 +31,7 @@ class PortDescriptor:
     required: bool = True
     default: Any = None
     encode_only: bool = False
+    decode_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,6 @@ class Signature:
     implementation: str
     inputs: dict[str, PortDescriptor] = field(default_factory=dict)
     outputs: dict[str, PortDescriptor] = field(default_factory=dict)
-    data_format: str | None = None  # "bytes" or "ndarray", native codecs only
 
     @classmethod
     def from_wasm(cls, wasm_path: str | Path) -> Signature:
@@ -66,6 +66,7 @@ class Signature:
                 required=desc.get("required", True),
                 default=desc.get("default"),
                 encode_only=desc.get("encode_only", False),
+                decode_only=desc.get("decode_only", False),
             )
         outputs: dict[str, PortDescriptor] = {}
         for name, desc in d.get("outputs", {}).items():
@@ -83,12 +84,15 @@ class Signature:
             implementation=d.get("implementation", ""),
             inputs=inputs,
             outputs=outputs,
-            data_format=d.get("data_format"),
         )
 
     def encode_only_inputs(self) -> set[str]:
         """Port names where encode_only is True."""
         return {n for n, p in self.inputs.items() if p.encode_only}
+
+    def decode_only_inputs(self) -> set[str]:
+        """Port names where decode_only is True."""
+        return {n for n, p in self.inputs.items() if p.decode_only}
 
     def output_types(self) -> dict[str, str]:
         """Map of output port name to type string."""

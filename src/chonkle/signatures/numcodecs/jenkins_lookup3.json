@@ -1,0 +1,17 @@
+{
+  "codec_id": "jenkins_lookup3",
+  "implementation": "numcodecs.jenkins_lookup3",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "initval": {"type": "int", "required": false, "default": 0},
+    "prefix": {"type": "string", "required": false}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["initval", "prefix"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

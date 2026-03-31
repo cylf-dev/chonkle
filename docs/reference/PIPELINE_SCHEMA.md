@@ -54,6 +54,7 @@ The pipeline's public input ports -- what callers must supply. Each key is a por
 
 - `type` (string, required): the semantic type of the port. Valid values follow the protospec type vocabulary (see the [Types section of the codec inventory](https://github.com/cylf-dev/protospec/blob/main/codec-inventory.md#types)): `"bytes"`, `"string"`, `"int"`, `"uint"`, `"float"`, `"bool"`, `"uint[]"`, `"dtype_desc"`.
 - `encode_only` (bool, optional): if true, this input is only meaningful during encoding. It is omitted from the port-map during decode, and any derived codec signature will carry this annotation so that outer pipelines can handle it correctly.
+- `decode_only` (bool, optional): if true, this input is only meaningful during decoding. It is omitted from the port-map during encode. The symmetric counterpart to `encode_only`.
 
 `required` and `default` are absent (unlike codec signature inputs, which carry both). All pipeline inputs are caller-supplied -- there is no fallback at the pipeline boundary. Parameters with baked-in values belong in `constants`.
 
@@ -158,3 +159,11 @@ The protospec assumes codecs are resolved from a registry by `codec_id`. Chonkle
 **Ours**: `encode_only` is permitted on pipeline inputs
 
 A pipeline's derived codec signature needs `encode_only` annotations so that outer pipelines know which inputs to omit during decode. The protospec does not show this on pipeline inputs, but it is a logical extension of the same property on codec signature inputs.
+
+### `decode_only` on codec signature and pipeline inputs
+
+**Protospec**: no `decode_only` property exists in the signature model
+
+**Ours**: `decode_only` is supported on codec signature inputs and pipeline inputs
+
+The protospec has `encode_only` but no symmetric counterpart for decode. Chonkle adds `decode_only` to handle codecs with inputs meaningful only during decoding (e.g. packbits, where `decode_dtype` is only needed during decode). The executor omits `decode_only` ports from the port-map during encode, mirroring the `encode_only` behavior during decode. See the [signature model gap analysis](protospec/PROTOSPEC_NOTES.md#no-decode_only-property) for catalog examples where the protospec lacks this capability.
