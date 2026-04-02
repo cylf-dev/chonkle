@@ -1,0 +1,17 @@
+{
+  "codec_id": "bitround",
+  "implementation": "numcodecs.bitround",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "keepbits": {"type": "int", "required": true, "encode_only": true},
+    "dtype": {"type": "string", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["keepbits"],
+    "encode": {"mode": "ndarray", "dtype_port": "dtype"},
+    "decode": {"mode": "ndarray", "dtype_port": "dtype"}
+  }
+}

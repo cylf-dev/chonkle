@@ -1,0 +1,16 @@
+{
+  "codec_id": "json2",
+  "implementation": "numcodecs.json2",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "dtype": {"type": "string", "required": true, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": [],
+    "encode": {"mode": "ndarray", "dtype_port": "dtype"},
+    "decode": {"mode": "bytes"}
+  }
+}

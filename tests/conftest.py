@@ -1,51 +1,18 @@
-import shutil
+"""pytest configuration and shared fixtures for chonkle tests."""
+
+import json
 from pathlib import Path
 
 import pytest
 
-from chonkle.wasm_download import download_https
+from chonkle.resolver import Resolver
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures" / "chunks"
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+PIPELINES_DIR = FIXTURES_DIR / "pipelines"
+CHUNKS_DIR = FIXTURES_DIR / "chunks"
 
-_COG_WASM_DIR = FIXTURES_DIR / "cog_wasm"
-
-# Registry of .wasm fixtures not committed to git.
-# To add a new fixture: add an entry here, add a named fixture below,
-# and add a CI cache step in .github/workflows/ci.yml keyed on the version tag.
-_WASM_DOWNLOADS: dict[str, str] = {
-    "tiff-predictor-2-c.wasm": (
-        "https://github.com/cylf-dev/tiff-predictor-2-c"
-        "/releases/download/v0.2.0/tiff-predictor-2-c.wasm"
-    ),
-    "tiff-predictor-2-python.wasm": (
-        "https://github.com/cylf-dev/tiff-predictor-2-python"
-        "/releases/download/v0.1.0/tiff-predictor-2-python.wasm"
-    ),
-}
-
-
-def _ensure_wasm_fixture(filename: str) -> Path:
-    dest = _COG_WASM_DIR / filename
-    if not dest.exists():
-        shutil.copy2(download_https(_WASM_DOWNLOADS[filename]), dest)
-    return dest
-
-
-@pytest.fixture(scope="session")
-def ensure_core_wasm() -> Path:
-    return _ensure_wasm_fixture("tiff-predictor-2-c.wasm")
-
-
-@pytest.fixture(scope="session")
-def ensure_component_wasm() -> Path:
-    return _ensure_wasm_fixture("tiff-predictor-2-python.wasm")
-
-
-CHUNK_PATHS = [
-    FIXTURES_DIR / "cog" / "0",
-    FIXTURES_DIR / "zarr_zlib" / "0",
-    FIXTURES_DIR / "zarr_zstd" / "0",
-]
+REPO_ROOT = Path(__file__).parent.parent
+CODEC_DIR = REPO_ROOT / "codec"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -66,3 +33,68 @@ def pytest_collection_modifyitems(
     for item in items:
         if "network" in item.keywords:
             item.add_marker(skip_network)
+
+
+@pytest.fixture
+def raw_chunk() -> bytes:
+    """Raw bytes of known content suitable for codec round-trip testing.
+
+    Patterned bytes compress and decompress deterministically.
+    """
+    return bytes(range(256)) * 64
+
+
+@pytest.fixture
+def page_split_input() -> tuple[bytes, int, int]:
+    """Input bytes and split offsets for page-split testing.
+
+    Returns (data, rep_length, def_length) such that rep_length + def_length
+    is less than len(data), producing three non-empty segments.
+    """
+    data = bytes(range(256)) * 16  # 4096 bytes
+    rep_length = 128
+    def_length = 256
+    return data, rep_length, def_length
+
+
+@pytest.fixture
+def cog_chunk() -> bytes:
+    """A real COG tile compressed with zlib (level 9) + tiff-predictor-2.
+
+    1024x1024 uint16 Sentinel-2 band tile. Decodes to 2,097,152 bytes.
+    """
+    return (CHUNKS_DIR / "cog-chunk-0").read_bytes()
+
+
+@pytest.fixture
+def cog_decode_pipeline_json() -> dict:
+    """Pipeline dict for the COG zlib+tiff-predictor-2 decode chain."""
+    with (PIPELINES_DIR / "cog-decode-pipeline.json").open() as f:
+        return json.load(f)
+
+
+@pytest.fixture
+def cog_encode_pipeline_json() -> dict:
+    """Pipeline dict for the COG tiff-predictor-2+zlib encode chain."""
+    with (PIPELINES_DIR / "cog-encode-pipeline.json").open() as f:
+        return json.load(f)
+
+
+@pytest.fixture
+def cog_codec_resolver() -> Resolver:
+    """Resolver with explicit paths for the COG codec wasm files."""
+    return Resolver(
+        paths={
+            "zlib": CODEC_DIR / "zlib-rs" / "zlib.wasm",
+            "tiff-predictor-2": (
+                CODEC_DIR / "tiff-predictor-2-c" / "tiff-predictor-2.wasm"
+            ),
+        }
+    )
+
+
+@pytest.fixture
+def page_split_pipeline_json() -> dict:
+    """Parsed pipeline JSON for the page-split-dag fixture."""
+    with (PIPELINES_DIR / "page-split-dag.json").open() as f:
+        return json.load(f)

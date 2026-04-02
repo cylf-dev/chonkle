@@ -1,0 +1,15 @@
+{
+  "codec_id": "fletcher32",
+  "implementation": "numcodecs.fletcher32",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": [],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

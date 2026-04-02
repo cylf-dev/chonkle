@@ -1,15 +1,10 @@
 import io
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from chonkle.wasm_download import (
-    download_https,
-    download_oci,
-    get_cache_dir,
-)
+from chonkle.wasm_download import resolve_uri
 
 URLOPEN = "chonkle.wasm_download.urllib.request.urlopen"
 ORAS_CLIENT = "oras.client.OrasClient"
@@ -23,65 +18,57 @@ def _fake_response(data: bytes) -> MagicMock:
     return resp
 
 
-class TestGetCacheDir:
-    def test_default_uses_tempdir(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.delenv("CHONKLE_CACHE_DIR", raising=False)
-        monkeypatch.setenv("TMPDIR", str(tmp_path))
-        monkeypatch.setattr(tempfile, "tempdir", None)
-        result = get_cache_dir()
-        assert result == tmp_path / "chonkle" / "wasm"
-        assert result.exists()
+class TestResolveUriFile:
+    def test_file_uri_yields_path(self, tmp_path: Path) -> None:
+        wasm = tmp_path / "codec.wasm"
+        wasm.write_bytes(b"\x00asm\x01\x00\x00\x00")
+        with resolve_uri(f"file://{wasm}") as path:
+            assert path == wasm
 
-    def test_env_var_override(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        monkeypatch.setenv("CHONKLE_CACHE_DIR", str(tmp_path / "custom"))
-        result = get_cache_dir()
-        assert result == tmp_path / "custom"
-        assert result.exists()
+    def test_http_raises(self) -> None:
+        with (
+            pytest.raises(ValueError, match="HTTP is not supported"),
+            resolve_uri("http://example.com/codec.wasm"),
+        ):
+            pass
+
+    def test_unsupported_scheme_raises(self) -> None:
+        with (
+            pytest.raises(ValueError, match="Unsupported URI scheme"),
+            resolve_uri("ftp://example.com/codec.wasm"),
+        ):
+            pass
 
 
 class TestDownloadHttps:
-    def test_downloads_and_caches(self, tmp_path: Path) -> None:
+    def test_downloads_wasm(self) -> None:
         wasm_bytes = b"\x00asm\x01\x00\x00\x00"
         resp = _fake_response(wasm_bytes)
 
-        with patch(URLOPEN, return_value=resp):
-            path = download_https(
-                "https://example.com/releases/v1/codec.wasm",
-                cache_dir=tmp_path,
-            )
+        with (
+            patch(URLOPEN, return_value=resp),
+            resolve_uri("https://example.com/releases/v1/codec.wasm") as path,
+        ):
+            assert path.exists()
+            assert path.name == "codec.wasm"
+            assert path.read_bytes() == wasm_bytes
 
-        assert path.exists()
-        assert path.name == "codec.wasm"
-        assert path.read_bytes() == wasm_bytes
+    def test_temp_dir_cleaned_up_after_exit(self) -> None:
+        wasm_bytes = b"\x00asm\x01\x00\x00\x00"
+        resp = _fake_response(wasm_bytes)
+        captured: list[Path] = []
 
-    def test_cache_hit_skips_download(self, tmp_path: Path) -> None:
-        url = "https://example.com/releases/v1/codec.wasm"
-        resp = _fake_response(b"\x00asm\x01\x00\x00\x00")
+        with (
+            patch(URLOPEN, return_value=resp),
+            resolve_uri("https://example.com/releases/v1/codec.wasm") as path,
+        ):
+            captured.append(path)
 
-        with patch(URLOPEN, return_value=resp) as mock:
-            path1 = download_https(url, cache_dir=tmp_path)
-            path2 = download_https(url, cache_dir=tmp_path)
-
-        assert path1 == path2
-        mock.assert_called_once()
-
-    def test_force_redownloads(self, tmp_path: Path) -> None:
-        url = "https://example.com/releases/v1/codec.wasm"
-        resp = _fake_response(b"\x00asm\x01\x00\x00\x00")
-
-        with patch(URLOPEN, return_value=resp) as mock:
-            download_https(url, cache_dir=tmp_path)
-            download_https(url, cache_dir=tmp_path, force=True)
-
-        assert mock.call_count == 2
+        assert not captured[0].exists()
 
 
 class TestDownloadOci:
-    def test_full_flow(self, tmp_path: Path) -> None:
+    def test_full_flow(self) -> None:
         wasm_bytes = b"\x00asm\x01\x00\x00\x00"
 
         def fake_pull(*, target, outdir):
@@ -92,66 +79,27 @@ class TestDownloadOci:
         mock_client = MagicMock()
         mock_client.pull.side_effect = fake_pull
 
-        with patch(ORAS_CLIENT, return_value=mock_client):
-            path = download_oci(
-                "oci://ghcr.io/org/repo:v1.0",
-                cache_dir=tmp_path,
-            )
-
-        assert path.exists()
-        assert path.read_bytes() == wasm_bytes
-        mock_client.pull.assert_called_once()
-
-    def test_cache_hit_skips_pull(self, tmp_path: Path) -> None:
-        # Pre-populate cache directory with a .wasm file.
-        ref_dir = tmp_path / "oci" / "ghcr.io" / "org" / "repo" / "v1.0"
-        ref_dir.mkdir(parents=True)
-        cached = ref_dir / "codec.wasm"
-        cached.write_bytes(b"\x00asm\x01\x00\x00\x00")
-
-        mock_client = MagicMock()
-
-        with patch(ORAS_CLIENT, return_value=mock_client):
-            path = download_oci(
-                "oci://ghcr.io/org/repo:v1.0",
-                cache_dir=tmp_path,
-            )
-
-        assert path == cached
-        mock_client.pull.assert_not_called()
-
-    def test_force_bypasses_cache(self, tmp_path: Path) -> None:
-        ref_dir = tmp_path / "oci" / "ghcr.io" / "org" / "repo" / "v1.0"
-        ref_dir.mkdir(parents=True)
-        cached = ref_dir / "codec.wasm"
-        cached.write_bytes(b"\x00asm\x01\x00\x00\x00")
-
-        mock_client = MagicMock()
-        mock_client.pull.return_value = [str(cached)]
-
-        with patch(ORAS_CLIENT, return_value=mock_client):
-            download_oci(
-                "oci://ghcr.io/org/repo:v1.0",
-                cache_dir=tmp_path,
-                force=True,
-            )
+        with (
+            patch(ORAS_CLIENT, return_value=mock_client),
+            resolve_uri("oci://ghcr.io/org/repo:v1.0") as path,
+        ):
+            assert path.exists()
+            assert path.read_bytes() == wasm_bytes
 
         mock_client.pull.assert_called_once()
 
-    def test_no_wasm_file_raises(self, tmp_path: Path) -> None:
-        txt_file = tmp_path / "oci" / "ghcr.io" / "org" / "repo" / "v1.0" / "readme.txt"
-        txt_file.parent.mkdir(parents=True)
-        txt_file.write_bytes(b"hello")
+    def test_no_wasm_file_raises(self) -> None:
+        def fake_pull(*, target, outdir):
+            txt = Path(outdir) / "readme.txt"
+            txt.write_bytes(b"hello")
+            return [str(txt)]
 
         mock_client = MagicMock()
-        mock_client.pull.return_value = [str(txt_file)]
+        mock_client.pull.side_effect = fake_pull
 
         with (
             patch(ORAS_CLIENT, return_value=mock_client),
             pytest.raises(ValueError, match=r"No \.wasm file found"),
+            resolve_uri("oci://ghcr.io/org/repo:v1.0"),
         ):
-            download_oci(
-                "oci://ghcr.io/org/repo:v1.0",
-                cache_dir=tmp_path,
-                force=True,
-            )
+            pass

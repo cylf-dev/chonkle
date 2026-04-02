@@ -1,0 +1,16 @@
+{
+  "codec_id": "delta",
+  "implementation": "numcodecs.delta",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "dtype": {"type": "string", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["dtype"],
+    "encode": {"mode": "ndarray", "dtype_port": "dtype"},
+    "decode": {"mode": "ndarray", "dtype_port": "dtype"}
+  }
+}

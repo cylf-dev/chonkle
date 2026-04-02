@@ -1,0 +1,17 @@
+{
+  "codec_id": "quantize",
+  "implementation": "numcodecs.quantize",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "digits": {"type": "int", "required": true, "encode_only": true},
+    "dtype": {"type": "string", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["digits", "dtype"],
+    "encode": {"mode": "ndarray", "dtype_port": "dtype"},
+    "decode": {"mode": "ndarray", "dtype_port": "dtype"}
+  }
+}

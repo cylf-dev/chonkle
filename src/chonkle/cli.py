@@ -1,118 +1,252 @@
 """CLI entry point for chonkle."""
 
 import argparse
-import shutil
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
-import numpy as np
-
-from chonkle.pipeline import decode, encode, get_codecs
+from chonkle.executor import run
+from chonkle.pipeline import Direction, prepare
+from chonkle.resolver import CodecInfo, Resolver
+from chonkle.wasm_signature import embed_signature
 
 
 def main() -> None:
     """Entry point for the chonkle CLI."""
     parser = argparse.ArgumentParser(
         prog="chonkle",
-        description="Utilities for encoding and decoding chunks.",
+        description="Execute a Wasm codec pipeline DAG.",
     )
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # ── decode ──
-    dc_parser = subparsers.add_parser(
-        "decode",
-        help="Decode a chunk and display or save the result.",
+    # --- run command ---
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Execute a pipeline JSON against named input data.",
     )
-    dc_parser.add_argument(
-        "chunk_path",
+    run_parser.add_argument(
+        "pipeline",
         type=Path,
-        help="Path to an encoded chunk file "
-        "(sidecar metadata expected at <path>.json).",
+        help="Path to a pipeline JSON file.",
     )
-    dc_parser.add_argument(
-        "--pipeline",
-        type=Path,
-        default=None,
-        help="Path to a pipeline JSON file. Defaults to <chunk_path>.json sidecar.",
+    run_parser.add_argument(
+        "--input",
+        metavar="NAME=FILE",
+        action="append",
+        default=[],
+        dest="inputs",
+        help="Named input port: --input bytes=chunk.bin (repeatable).",
     )
-    dc_parser.add_argument(
-        "-o",
+    run_parser.add_argument(
         "--output",
+        metavar="NAME=FILE",
+        action="append",
+        default=[],
+        dest="outputs",
+        help="Write named output port to file: --output bytes=result.bin (repeatable).",
+    )
+    run_parser.add_argument(
+        "--direction",
+        choices=["encode", "decode"],
+        default=None,
+        help=(
+            "Direction to run the pipeline "
+            "(default: the pipeline's declared direction). "
+            "Specifying the opposite direction inverts the DAG."
+        ),
+    )
+    run_parser.add_argument(
+        "--codec-store",
         type=Path,
         default=None,
-        help="Save the decoded array to a .npy file instead of printing.",
+        help="Path to the local codec store directory.",
+    )
+    run_parser.add_argument(
+        "--preference",
+        default=None,
+        help="Comma-separated backend preference order (e.g., 'core,component').",
+    )
+    run_parser.add_argument(
+        "--override",
+        metavar="ID=IMPL",
+        action="append",
+        default=[],
+        dest="overrides",
+        help="Override codec implementation: --override zlib=zlib-rs (repeatable).",
+    )
+    run_parser.add_argument(
+        "--source",
+        metavar="ID=URI",
+        action="append",
+        default=[],
+        dest="sources",
+        help=(
+            "Force-resolve a codec from a URI, bypassing the local store: "
+            "--source zlib=https://example.com/zlib.wasm (repeatable)."
+        ),
     )
 
-    # ── encode ──
-    en_parser = subparsers.add_parser(
-        "encode",
-        help="Encode a .npy array through a codec pipeline.",
+    # --- codecs command ---
+    codecs_parser = subparsers.add_parser(
+        "codecs",
+        help="List installed codec implementations in the local store.",
     )
-    en_parser.add_argument(
-        "input",
-        type=Path,
-        help="Path to a .npy file containing the array to encode.",
+    codecs_parser.add_argument(
+        "codec_id",
+        nargs="?",
+        default=None,
+        help="Filter to a specific codec_id.",
     )
-    en_parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        required=True,
-        help="Path for the encoded output. "
-        "Pipeline is read from <output>.json sidecar by default.",
-    )
-    en_parser.add_argument(
-        "--pipeline",
+    codecs_parser.add_argument(
+        "--codec-store",
         type=Path,
         default=None,
-        help="Path to a pipeline JSON file. Defaults to <output>.json sidecar.",
+        help="Path to the local codec store directory.",
+    )
+
+    # --- embed-signature command ---
+    embed_parser = subparsers.add_parser(
+        "embed-signature",
+        help="Embed a signature JSON file into a .wasm binary as a custom section.",
+    )
+    embed_parser.add_argument(
+        "wasm_file",
+        type=Path,
+        help="Path to the .wasm binary (modified in-place).",
+    )
+    embed_parser.add_argument(
+        "signature_json",
+        type=Path,
+        help="Path to the signature JSON file.",
     )
 
     args = parser.parse_args()
+    if args.command == "run":
+        _run_command(args)
+    elif args.command == "codecs":
+        _codecs_command(args)
+    elif args.command == "embed-signature":
+        _embed_signature_command(args)
 
-    if args.command == "decode":
-        _run_decode(args)
-    elif args.command == "encode":
-        _run_encode(args)
 
+def _build_resolver(
+    args: argparse.Namespace, pipeline_sources: dict[str, str]
+) -> Resolver:
+    """Build a Resolver from CLI flags and pipeline sources."""
+    preference = args.preference.split(",") if args.preference else None
 
-def _run_decode(args: argparse.Namespace) -> None:
-    """Decode a chunk and print or save the result."""
-    pipeline_path = args.pipeline or args.chunk_path.parent / (
-        args.chunk_path.name + ".json"
+    overrides: dict[str, str] = {}
+    for spec in args.overrides:
+        if "=" not in spec:
+            sys.stderr.write(f"--override must be ID=IMPL, got {spec!r}\n")
+            sys.exit(1)
+        codec_id, impl = spec.split("=", 1)
+        overrides[codec_id] = impl
+
+    force_sources: dict[str, str] = {}
+    for spec in args.sources:
+        if "=" not in spec:
+            sys.stderr.write(f"--source must be ID=URI, got {spec!r}\n")
+            sys.exit(1)
+        codec_id, uri = spec.split("=", 1)
+        force_sources[codec_id] = uri
+
+    return Resolver(
+        codec_store=args.codec_store,
+        preference=preference,
+        overrides=overrides,
+        force_sources=force_sources,
+        pipeline_sources=pipeline_sources,
     )
-    codec_specs = get_codecs(pipeline_path)
-    data = args.chunk_path.read_bytes()
-    arr = decode(data, codec_specs)
 
-    if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        np.save(args.output, arr)
-        sys.stdout.write(f"Saved {arr.shape} {arr.dtype} array to {args.output}\n")
+
+def _run_command(args: argparse.Namespace) -> None:
+    """Execute a pipeline and write or report outputs."""
+    with args.pipeline.open() as f:
+        pipeline_json: dict[str, Any] = json.load(f)
+
+    inputs: dict[str, bytes] = {}
+    for spec in args.inputs:
+        if "=" not in spec:
+            sys.stderr.write(f"--input must be NAME=FILE, got {spec!r}\n")
+            sys.exit(1)
+        name, path = spec.split("=", 1)
+        inputs[name] = Path(path).read_bytes()
+
+    raw_direction = args.direction or pipeline_json.get("direction")
+    if raw_direction not in ("encode", "decode"):
+        sys.stderr.write(f"Invalid or missing direction: {raw_direction!r}\n")
+        sys.exit(1)
+    direction: Direction = raw_direction
+    resolver = _build_resolver(args, pipeline_json.get("sources", {}))
+    prepared = prepare(pipeline_json, direction, resolver=resolver)
+    result = run(prepared, inputs)
+
+    requested_outputs: dict[str, str] = {}
+    for spec in args.outputs:
+        if "=" not in spec:
+            sys.stderr.write(f"--output must be NAME=FILE, got {spec!r}\n")
+            sys.exit(1)
+        name, path = spec.split("=", 1)
+        requested_outputs[name] = path
+
+    for port_name, data in result.items():
+        if port_name in requested_outputs:
+            out_path = Path(requested_outputs[port_name])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(data)
+            sys.stdout.write(f"Wrote {len(data)} bytes to {out_path}\n")
+        else:
+            sys.stdout.write(f"Output {port_name!r}: {len(data)} bytes\n")
+
+
+def _print_table(cols: tuple[str, ...], rows: list[CodecInfo]) -> None:
+    """Print a simple aligned table with header and separator."""
+
+    def _cell(entry: CodecInfo, col: str) -> str:
+        return str(getattr(entry, col) or "(unnamed)")
+
+    widths = {c: max(len(c), max(len(_cell(r, c)) for r in rows)) for c in cols}
+    sep = "  "
+    header = sep.join(f"{c:<{widths[c]}s}" for c in cols)
+    rule = sep.join("─" * widths[c] for c in cols)
+    sys.stdout.write(f"{header}\n{rule}\n")
+    for row in rows:
+        line = sep.join(f"{_cell(row, c):<{widths[c]}s}" for c in cols)
+        sys.stdout.write(f"{line}\n")
+
+
+def _codecs_command(args: argparse.Namespace) -> None:
+    """List installed codec implementations."""
+    resolver = Resolver(codec_store=args.codec_store)
+    entries = resolver.list_codecs()
+
+    if args.codec_id:
+        entries = [e for e in entries if e.codec_id == args.codec_id]
+
+    if not entries:
+        if args.codec_id:
+            sys.stdout.write(f"No implementations found for {args.codec_id!r}\n")
+        else:
+            sys.stdout.write(f"No codecs installed in {resolver.store_path}\n")
+        return
+
+    if args.codec_id:
+        cols = ("implementation", "backend", "location")
     else:
-        sys.stdout.write(f"Shape: {arr.shape}, dtype: {arr.dtype}\n")
-        slices = tuple(slice(min(5, s)) for s in arr.shape)
-        sys.stdout.write(f"First 5x5:\n{arr[slices]}\n")
+        cols = ("codec_id", "implementation", "backend")
+    _print_table(cols, entries)
 
 
-def _run_encode(args: argparse.Namespace) -> None:
-    """Encode a .npy array through a codec pipeline."""
-    arr = np.load(args.input)
+def _embed_signature_command(args: argparse.Namespace) -> None:
+    """Embed a codec signature into a .wasm binary."""
+    wasm_bytes = args.wasm_file.read_bytes()
+    with args.signature_json.open() as f:
+        signature = json.load(f)
 
-    sidecar = args.output.parent / (args.output.name + ".json")
-    pipeline_path = args.pipeline if args.pipeline is not None else sidecar
+    result = embed_signature(wasm_bytes, signature)
+    args.wasm_file.write_bytes(result)
 
-    codec_specs = get_codecs(pipeline_path)
-    encoded = encode(arr, codec_specs)
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_bytes(encoded)
-
-    # Copy pipeline to sidecar if it came from elsewhere.
-    if args.pipeline is not None and args.pipeline.resolve() != sidecar.resolve():
-        shutil.copy2(args.pipeline, sidecar)
-
-    sys.stdout.write(
-        f"Encoded {arr.shape} {arr.dtype} → {len(encoded)} bytes → {args.output}\n"
-    )
+    added = len(result) - len(wasm_bytes)
+    sys.stdout.write(f"Embedded {added} byte custom section in {args.wasm_file}\n")

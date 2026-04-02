@@ -1,0 +1,18 @@
+{
+  "codec_id": "blosc",
+  "implementation": "numcodecs.blosc",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "cname": {"type": "string", "required": false, "default": "lz4", "encode_only": true},
+    "clevel": {"type": "int", "required": false, "default": 5, "encode_only": true},
+    "shuffle": {"type": "int", "required": false, "default": 1, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["cname", "clevel", "shuffle"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

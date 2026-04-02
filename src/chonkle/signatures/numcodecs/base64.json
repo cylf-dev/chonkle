@@ -1,0 +1,15 @@
+{
+  "codec_id": "base64",
+  "implementation": "numcodecs.base64",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": [],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

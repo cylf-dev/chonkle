@@ -1,0 +1,14 @@
+package chonkle:codec@0.1.0;
+
+interface transform {
+    /// A named byte buffer — one port in the port map.
+    type port-name = string;
+    type port-map = list<tuple<port-name, list<u8>>>;
+
+    encode: func(inputs: port-map) -> result<port-map, string>;
+    decode: func(inputs: port-map) -> result<port-map, string>;
+}
+
+world codec {
+    export transform;
+}

@@ -1,0 +1,16 @@
+{
+  "codec_id": "lzma",
+  "implementation": "numcodecs.lzma",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "preset": {"type": "int", "required": false, "default": 1, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["preset"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "codec_id": "crc32c",
+  "implementation": "numcodecs.crc32c",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "location": {"type": "string", "required": false}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["location"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

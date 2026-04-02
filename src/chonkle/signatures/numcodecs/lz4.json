@@ -1,0 +1,16 @@
+{
+  "codec_id": "lz4",
+  "implementation": "numcodecs.lz4",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "acceleration": {"type": "int", "required": false, "default": 1, "encode_only": true}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["acceleration"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}

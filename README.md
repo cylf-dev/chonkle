@@ -1,122 +1,100 @@
 # chonkle
 
-Chonkle is a demonstrator, built to explore WebAssembly (Wasm) as a codec delivery mechanism for chunked array formats like Zarr and COG. In these formats, each chunk is encoded by a sequence (i.e., a pipeline) of codecs applied in order — bytes, compression, prediction filters, etc. Chonkle pipelines can mix standard Python codecs (via [numcodecs](https://numcodecs.readthedocs.io/)) with custom Wasm codecs that run at near-native speed inside a sandbox — portable, safe, and free from platform-specific build tooling. See [WASM.md](docs/WASM.md) for details on how Wasm codecs work. The library is functional but should be treated as a learning artifact; our understanding of Wasm is still evolving.
+A Python host for Wasm codec pipelines. Pipelines are directed acyclic graphs (DAGs) of codec steps defined in JSON. The orchestrator parses the DAG, validates wiring against codec signatures, and executes the pipeline via [Wasmtime](https://wasmtime.dev/).
 
-## Install
+Status: proof of concept.
 
-Requires [uv](https://docs.astral.sh/uv/).
+## Codec backends
+
+chonkle supports three codec backends. Each implements the same `Codec` ABC (`call(direction, port_map)` and `signature()`), so backends can be mixed freely within a single pipeline.
+
+**Component Model Wasm** — `.wasm` components implementing the `chonkle:codec/transform@0.1.0` WIT interface. Any language with a Component Model toolchain (Rust, C, Python via componentize-py) can produce a conforming component. Data transfer uses the canonical ABI. The Wasmtime sandbox isolates each component from the host.
+
+**Core Wasm** — wasm32-wasi reactor modules using a binary port-map wire format via `Memory.read`/`Memory.write`. When consecutive pipeline steps are both core wasm, data transfers between their linear memories use `ctypes.memmove` (single-copy, no serialization round-trip).
+
+**Native (numcodecs)** — Python codecs from the [numcodecs](https://numcodecs.readthedocs.io/) library. No Wasm overhead. `numcodecs` and `numpy` are optional dependencies, imported lazily. Adding a new numcodecs codec requires only adding a signature file.
+
+The `Resolver` selects among available implementations using a configurable backend preference list. The default preference order is `["native", "core", "component"]`.
+
+## Usage
+
+### CLI
 
 ```bash
+# Run a pipeline
+chonkle run pipeline.json --input bytes=chunk.bin --output bytes=out.bin
+
+# With resolver options
+chonkle run pipeline.json --input bytes=chunk.bin \
+  --direction decode \
+  --codec-store ./codec/ \
+  --preference core,component,native \
+  --override zlib=zlib-rs \
+  --source zlib=https://example.com/zlib.wasm
+
+# List installed codecs
+chonkle codecs
+
+# Show details for a specific codec
+chonkle codecs zlib
+
+# Embed a signature into a .wasm binary (build-time tool)
+chonkle embed-signature codec.wasm signature.json
+```
+
+### Python API
+
+```python
+from chonkle.pipeline import prepare
+from chonkle.executor import run
+
+prepared = prepare("pipeline.json", direction="decode")
+outputs = run(prepared, {"bytes": chunk_bytes})
+```
+
+## Format drivers
+
+The executor is format-agnostic. It accepts a pipeline DAG and chunk data, runs the codecs, and returns the result. It has no knowledge of Zarr, Parquet, COG, ORC, or any other file format.
+
+A **format driver** is the layer above the executor that bridges a specific file format and the pipeline executor. It reads format-specific metadata, translates it into a pipeline DAG, supplies metadata-derived inputs, and manages chunk I/O. Format drivers are outside the scope of this repository.
+
+## Documentation
+
+- [docs/OVERVIEW.md](docs/OVERVIEW.md) — Architecture, design rationale, and execution model
+- [docs/reference/PIPELINE_SCHEMA.md](docs/reference/PIPELINE_SCHEMA.md) — Pipeline JSON schema
+- [docs/reference/codec-contract/](docs/reference/codec-contract/) — Codec interface specs (Component Model, Core Wasm, Native)
+- [docs/reference/CODEC_RESOLUTION.md](docs/reference/CODEC_RESOLUTION.md) — Codec resolution chain and backend preference
+
+See [docs/README.md](docs/README.md) for the full index.
+
+## Development
+
+- **Package manager**: uv
+- **Build backend**: hatchling
+- **Python**: >= 3.13
+- **Linting/formatting**: ruff
+- **Type checking**: mypy
+- **Testing**: pytest
+- **Pre-commit**: ruff check, ruff format, mypy, yaml/toml validation
+- **CI**: GitHub Actions (lint on 3.14, test on 3.13 and 3.14)
+
+```bash
+# Install dependencies
 uv sync
+
+# Include native (numcodecs) backend
+uv sync --extra native
+
+# Run tests
+uv run pytest
+
+# Run linter
+uv run ruff check
+
+# Network tests (downloads codecs from OCI registries)
+uv run pytest --run-network
 ```
-
-## How codec pipelines work
-
-Each chunk has a sidecar JSON file that describes the codec pipeline used to encode it:
-
-```json
-{
-  "codecs": [
-    {
-      "name": "bytes",
-      "type": "numcodecs",
-      "configuration": {
-        "endian": "little",
-        "data_type": "uint16",
-        "shape": [1024, 1024]
-      }
-    },
-    {
-      "name": "tiff_predictor_2",
-      "type": "wasm",
-      "uri": "file://path/to/tiff-predictor-2-c.wasm",
-      "configuration": {
-        "bytes_per_sample": 2,
-        "width": 1024
-      }
-    },
-    {
-      "name": "zlib",
-      "type": "numcodecs",
-      "configuration": {
-        "level": 9
-      }
-    }
-  ]
-}
-```
-
-**Encoding** applies codecs in forward order (top to bottom): array → bytes → tiff_predictor_2 (Wasm) → zlib → compressed bytes.
-
-**Decoding** applies codecs in reverse order, unwinding the encoding.
-
-Each codec entry has:
-
-- `"name"` — codec identifier (for numcodecs lookup and human readability)
-- `"type"` — `"numcodecs"` or `"wasm"`
-- `"configuration"` — codec-specific parameters
-- `"uri"` — (Wasm only) URI of the `.wasm` module: `file://`, `https://`, or `oci://`
-
-Python and Wasm codec steps can be freely mixed in any order. For information on how Wasm codecs work, see [WASM.md](docs/WASM.md).
-
-## Python API
-
-```python
-from chonkle import decode, encode, get_codecs
-```
-
-### Load codec specs
-
-`get_codecs` extracts the codec spec list from a pipeline JSON file or a dict:
-
-```python
-from pathlib import Path
-from chonkle import get_codecs
-
-codecs = get_codecs(Path("pipeline.json"))       # from a file
-codecs = get_codecs({"codecs": [...]})           # from a dict
-```
-
-### Decode
-
-`decode` applies a codec pipeline in reverse order to raw bytes, returning a numpy array:
-
-```python
-from chonkle import decode, get_codecs
-
-codecs = get_codecs(Path("chunks/0.json"))
-arr = decode(Path("chunks/0").read_bytes(), codecs)
-```
-
-### Encode
-
-`encode` applies a codec pipeline in forward order, returning encoded bytes:
-
-```python
-from chonkle import encode
-
-encoded = encode(arr, codecs)
-```
-
-## Demo
-
-See [demo/](demo/) for a Jupyter notebook demonstrating the full pipeline with a real Sentinel-2 COG tile.
-
-## CLI
-
-A `chonkle` CLI is available for interactive use; run `chonkle --help` for usage.
-
-## Configuration
-
-Wasm codecs downloaded from HTTPS or OCI sources are cached locally to avoid redundant network requests.
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `CHONKLE_CACHE_DIR` | Override the Wasm module cache directory | `$TMPDIR/chonkle/wasm/` |
-| `CHONKLE_FORCE_DOWNLOAD` | Set to `1` to re-download cached Wasm modules, bypassing the local cache. Primarily useful for testing and development | unset |
-
-`$TMPDIR` is the OS temporary directory (e.g. `/tmp` on Linux, `/var/folders/...` on macOS). Run `echo $TMPDIR` to see the value on your system.
 
 ## Acknowledgements
 
-Partially supported by NASA-IMPACT VEDA project
+Partially supported by NASA-IMPACT VEDA project.

@@ -271,10 +271,14 @@ name = "chonkle"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "numcodecs" },
-    { name = "numpy" },
     { name = "oras" },
     { name = "wasmtime" },
+]
+
+[package.optional-dependencies]
+native = [
+    { name = "numcodecs" },
+    { name = "numpy" },
 ]
 
 [package.dev-dependencies]
@@ -293,11 +297,12 @@ notebook = [
 
 [package.metadata]
 requires-dist = [
-    { name = "numcodecs" },
-    { name = "numpy" },
+    { name = "numcodecs", marker = "extra == 'native'" },
+    { name = "numpy", marker = "extra == 'native'" },
     { name = "oras" },
     { name = "wasmtime" },
 ]
+provides-extras = ["native"]
 
 [package.metadata.requires-dev]
 dev = [

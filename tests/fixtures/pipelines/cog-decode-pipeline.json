@@ -1,0 +1,28 @@
+{
+  "codec_id": "cog-zlib-predictor2",
+  "direction": "decode",
+  "inputs": {"bytes": {"type": "bytes"}},
+  "constants": {
+    "bytes_per_sample": {"type": "int", "value": 2},
+    "width":            {"type": "int", "value": 1024},
+    "level":            {"type": "int", "value": 9}
+  },
+  "outputs": {"bytes": "predictor2.bytes"},
+  "steps": {
+    "zlib": {
+      "codec_id": "zlib",
+      "inputs": {
+        "bytes": "input.bytes",
+        "level": "constant.level"
+      }
+    },
+    "predictor2": {
+      "codec_id": "tiff-predictor-2",
+      "inputs": {
+        "bytes":            "zlib.bytes",
+        "bytes_per_sample": "constant.bytes_per_sample",
+        "width":            "constant.width"
+      }
+    }
+  }
+}

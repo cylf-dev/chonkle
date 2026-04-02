@@ -1,0 +1,42 @@
+{
+  "codec_id": "page-split-dag",
+  "direction": "encode",
+  "inputs": {"bytes": {"type": "bytes"}},
+  "constants": {
+    "rep_length": {"type": "uint", "value": 128},
+    "def_length": {"type": "uint", "value": 256}
+  },
+  "outputs": {
+    "rep_levels": "identity_rep.bytes",
+    "def_levels": "identity_def.bytes",
+    "data": "identity_data.bytes"
+  },
+  "steps": {
+    "page_split": {
+      "codec_id": "page-split",
+      "inputs": {
+        "bytes": "input.bytes",
+        "rep_length": "constant.rep_length",
+        "def_length": "constant.def_length"
+      }
+    },
+    "identity_rep": {
+      "codec_id": "identity",
+      "inputs": {
+        "bytes": "page_split.rep_levels"
+      }
+    },
+    "identity_def": {
+      "codec_id": "identity",
+      "inputs": {
+        "bytes": "page_split.def_levels"
+      }
+    },
+    "identity_data": {
+      "codec_id": "identity",
+      "inputs": {
+        "bytes": "page_split.data"
+      }
+    }
+  }
+}

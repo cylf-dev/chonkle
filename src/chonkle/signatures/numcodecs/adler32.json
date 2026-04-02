@@ -1,0 +1,16 @@
+{
+  "codec_id": "adler32",
+  "implementation": "numcodecs.adler32",
+  "inputs": {
+    "bytes": {"type": "bytes", "required": true},
+    "location": {"type": "string", "required": false}
+  },
+  "outputs": {
+    "bytes": {"type": "bytes"}
+  },
+  "native": {
+    "constructor_ports": ["location"],
+    "encode": {"mode": "bytes"},
+    "decode": {"mode": "bytes"}
+  }
+}
