@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-native = ["numcodecs", "numpy"]
+native = ["numcodecs", "numpy", "google-crc32c"]
 
 [project.scripts]
 chonkle = "chonkle.cli:main"
