@@ -53,7 +53,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --extra native
 
       - name: Cache core wasm fixture
         uses: actions/cache@v4
